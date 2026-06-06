@@ -1,20 +1,28 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.3.8.96
+// @version      0.3.8.97
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
 // @match        https://*.amazon.co.jp/*
-// @updateURL    https://raw.githubusercontent.com/hiro20926/gandam/main/gundambot-amazon.user.js
-// @downloadURL  https://raw.githubusercontent.com/hiro20926/gandam/main/gundambot-amazon.user.js
+// @updateURL    https://raw.githubusercontent.com/hiro20926/gandam/main/amazon/gundambot-amazon.user.js
+// @downloadURL  https://raw.githubusercontent.com/hiro20926/gandam/main/amazon/gundambot-amazon.user.js
 // @run-at       document-start
 // @grant        none
 // ==/UserScript==
 
 // ==================================================================
 // Build:    2026-06-07 (JST)
-// Version:  v0.3.8.96 (設定整理: 内蔵⚙設定でDiscord webhook端末保存 / skip_confirm常時 / 自己完結)
+// Version:  v0.3.8.97 (gandam repo を bot別サブフォルダに整理 / @updateURL を amazon/ パスへ)
+//
+// v0.3.8.97 (2026-06-07 リポジトリ整理):
+//   gandam リポジトリ(全bot統合)で Amazon を直下 → amazon/ サブフォルダに移動。
+//   pb-cart/ londo-bell-mobile/ と構成を揃える。
+//   @updateURL/@downloadURL を amazon/gundambot-amazon.user.js に変更(URL変更・要再インストール)。
+//   機能・ロジックは v0.3.8.96 から無変更(配置と更新URLのみ)。
+//
+// v0.3.8.96 (2026-06-07 設定アーキテクチャ整理・GitHub自己完結化):
 //
 // v0.3.8.96 (2026-06-07 設定アーキテクチャ整理・GitHub自己完結化):
 //   URLパラメータ + Netlify注入を廃止し、設定をアプリ内に集約 (購入bot/amazon/ で管理)。
@@ -3252,7 +3260,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.3.8.96';
+    const SCRIPT_VERSION = '0.3.8.97';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
