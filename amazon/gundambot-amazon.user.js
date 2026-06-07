@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.3.8.98
+// @version      0.3.8.99
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -14,7 +14,18 @@
 
 // ==================================================================
 // Build:    2026-06-07 (JST)
-// Version:  v0.3.8.98 (⚙ボタン死亡バグ修正 + 🛒新規開始で商品データに候補登録)
+// Version:  v0.3.8.99 (購入ロジック不整合修正: 注文成功検出を qty_stop の外=最優先へ)
+//
+// v0.3.8.99 (2026-06-07 HIRO 指摘「確定前で止まる」の根本=購入ロジック不整合):
+//   不整合: 「直近 click + 数量更新 = 注文成功」の検出が if(getEffectiveQtyStop()) の
+//           中にしか無く、qty_stop=OFF だと素通り → 確定成功後もループ継続。
+//           = ①「確定前で止まる」誤解 ②二重購入リスク(実害は Amazon 側ガードで低)。
+//   修正: 成功検出(wasRecentClick → 完全停止)を qty_stop 分岐の外・最優先に移動(2箇所:
+//         handleStockOutBuyNow 同期チェック / OTHER 同期チェック)。
+//   効果: 確定成功で qty_stop ON/OFF どちらでも確実に停止。
+//         確定前の在庫チラつきは qty_stop=OFF なら従来どおり粘る(2段階リリース維持)。
+//
+// v0.3.8.98 (2026-06-07 HIRO 報告 3点):
 //
 // v0.3.8.98 (2026-06-07 HIRO 報告 3点):
 //   ① ⚙設定ボタンが無反応 → 修正:
@@ -3277,7 +3288,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.3.8.98';
+    const SCRIPT_VERSION = '0.3.8.99';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -13772,23 +13783,28 @@
                     if (lastTs > 0) recentClickAgo = Date.now() - lastTs;
                 } catch (e) {}
                 const wasRecentClick = recentClickAgo >= 0 && recentClickAgo < 60000;
+                // ★v0.3.8.99: 注文成功検出を qty_stop の外(最優先)へ
+                //   直近 click + 数量更新 = 注文が通った事実 → qty_stop=ON/OFF どちらでも停止。
+                //   旧: この判定が if(getEffectiveQtyStop()) の中だったため OFF だと素通りし、
+                //       成功後もループ継続(「確定前で止まる」誤解 + 二重購入リスク)になっていた。
+                if (wasRecentClick) {
+                    try { logAm('warn', 'order-complete',
+                        '✅ 注文成功確認 (直近 click 後の数量更新検出 = 重複防止) → 完全停止', {
+                        url: location.href.slice(0, 200),
+                        clickAgoMs: recentClickAgo,
+                        qtyStop: getEffectiveQtyStop(),
+                    }); } catch (e) {}
+                    try {
+                        toast('✅ 注文成功!\n(直近 click 後の重複防止メッセージで成功確認)\n' +
+                              '自動停止しました、次は🛒で新規開始',
+                              BUY_GREEN, 15000);
+                    } catch (e) {}
+                    try { S.setStep(STEP_ORDER_PLACED); } catch (e) {}
+                    try { localStorage.removeItem('LB_AM_LAST_ORDER_CLICK_TS'); } catch (e) {}
+                    try { S.opFullStop(); } catch (e) {}
+                    return;
+                }
                 if (getEffectiveQtyStop()) {
-                    if (wasRecentClick) {
-                        try { logAm('warn', 'order-complete',
-                            '✅ 注文成功確認 (直近 click 後の数量更新検出 = 重複防止) → 完全停止', {
-                            url: location.href.slice(0, 200),
-                            clickAgoMs: recentClickAgo,
-                        }); } catch (e) {}
-                        try {
-                            toast('✅ 注文成功!\n(直近 click 後の重複防止メッセージで成功確認)\n' +
-                                  '自動停止しました、次は🛒で新規開始',
-                                  BUY_GREEN, 15000);
-                        } catch (e) {}
-                        try { S.setStep(STEP_ORDER_PLACED); } catch (e) {}
-                        try { localStorage.removeItem('LB_AM_LAST_ORDER_CLICK_TS'); } catch (e) {}
-                        try { S.opFullStop(); } catch (e) {}
-                        return;
-                    }
                     try { logAm('error', 'qty-update',
                         '「数量更新」検出 (handleStockOutBuyNow 同期チェック) + qtyStop=ON → 完全停止', {
                         url: location.href.slice(0, 200),
@@ -14705,23 +14721,26 @@
                         if (lastTs > 0) recentClickAgo = Date.now() - lastTs;
                     } catch (e) {}
                     const wasRecentClick = recentClickAgo >= 0 && recentClickAgo < 60000;
+                    // ★v0.3.8.99: 注文成功検出を qty_stop の外(最優先)へ(2箇所目)
+                    //   直近 click + 数量更新 = 注文が通った事実 → qty_stop=ON/OFF どちらでも停止。
+                    if (wasRecentClick) {
+                        try { logAm('warn', 'order-complete',
+                            '✅ 注文成功確認 (直近 click 後の数量更新検出 = 重複防止) → 完全停止', {
+                            url: location.href.slice(0, 200),
+                            clickAgoMs: recentClickAgo,
+                            qtyStop: getEffectiveQtyStop(),
+                        }); } catch (e) {}
+                        try {
+                            toast('✅ 注文成功!\n(直近 click 後の重複防止メッセージで成功確認)\n' +
+                                  '自動停止しました、次は🛒で新規開始',
+                                  BUY_GREEN, 15000);
+                        } catch (e) {}
+                        try { S.setStep(STEP_ORDER_PLACED); } catch (e) {}
+                        try { localStorage.removeItem('LB_AM_LAST_ORDER_CLICK_TS'); } catch (e) {}
+                        try { S.opFullStop(); } catch (e) {}
+                        return;
+                    }
                     if (getEffectiveQtyStop()) {
-                        if (wasRecentClick) {
-                            try { logAm('warn', 'order-complete',
-                                '✅ 注文成功確認 (直近 click 後の数量更新検出 = 重複防止) → 完全停止', {
-                                url: location.href.slice(0, 200),
-                                clickAgoMs: recentClickAgo,
-                            }); } catch (e) {}
-                            try {
-                                toast('✅ 注文成功!\n(直近 click 後の重複防止メッセージで成功確認)\n' +
-                                      '自動停止しました、次は🛒で新規開始',
-                                      BUY_GREEN, 15000);
-                            } catch (e) {}
-                            try { S.setStep(STEP_ORDER_PLACED); } catch (e) {}
-                            try { localStorage.removeItem('LB_AM_LAST_ORDER_CLICK_TS'); } catch (e) {}
-                            try { S.opFullStop(); } catch (e) {}
-                            return;
-                        }
                         try { logAm('error', 'qty-update',
                             '「数量更新」検出 (OTHER 同期チェック) + qtyStop=ON → 完全停止', {
                             url: location.href.slice(0, 200),
