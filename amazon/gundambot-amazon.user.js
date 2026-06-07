@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.3.8.99
+// @version      0.3.9.0
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -14,7 +14,16 @@
 
 // ==================================================================
 // Build:    2026-06-07 (JST)
-// Version:  v0.3.8.99 (購入ロジック不整合修正: 注文成功検出を qty_stop の外=最優先へ)
+// Version:  v0.3.9.0 (CSV に buynow_url 復活 = PC版TRANS-AMとの双方向データ連携)
+//
+// v0.3.9.0 (2026-06-07 PC版TRANS-AM連携):
+//   CSV書き出し/取込に buynow_url 列を復活(列: asin,product_name,buynow_url,saved_at,address_id)。
+//   - 書き出し: 保存済み B方式URL(LB_AM_BUYNOW_URL_<asin>)があれば出力
+//   - 取込: buynow_url があれば LB_AM_BUYNOW_URL_<asin> に復元(TRANS-AM可として)、無ければ ASIN_ONLY
+//   → PC版(amazon_transam)とCSVで双方向にやり取り可能。PCが吐いたCSVもiOSで取り込める
+//     (watch 等の余分な列はヘッダ名ベース解析なので無視される)。
+//
+// v0.3.8.99 (購入ロジック不整合修正: 注文成功検出を qty_stop の外=最優先へ)
 //
 // v0.3.8.99 (2026-06-07 HIRO 指摘「確定前で止まる」の根本=購入ロジック不整合):
 //   不整合: 「直近 click + 数量更新 = 注文成功」の検出が if(getEffectiveQtyStop()) の
@@ -3288,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.3.8.99';
+    const SCRIPT_VERSION = '0.3.9.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -8605,15 +8614,19 @@
     };
 
     const exportProductsToCsv = () => {
-        // ★v0.3.8.48: buynow_url 列を撤去 (B方式凍結に伴い、CSV はリスト管理のみ)
+        // ★v0.3.9.0: buynow_url 列を復活 (PC版 TRANS-AM とのデータ双方向連携)。
+        //   保存済み B方式 URL (LB_AM_BUYNOW_URL_<asin>) があれば書き出す。無ければ空。
+        //   列: asin, product_name, buynow_url, saved_at, address_id
         const products = listSavedProducts();
         const addressID = (function(){ try { return localStorage.getItem('LB_AM_ADDRESS_ID') || ''; } catch (e) { return ''; } })();
-        const header = ['asin', 'product_name', 'saved_at', 'address_id'].join(',');
+        const header = ['asin', 'product_name', 'buynow_url', 'saved_at', 'address_id'].join(',');
         const rows = products.map((p) => {
             const iso = p.savedAt ? new Date(p.savedAt).toISOString() : '';
+            const buUrl = (function(){ try { return localStorage.getItem('LB_AM_BUYNOW_URL_' + p.asin) || ''; } catch (e) { return ''; } })();
             return [
                 csvEscapeField(p.asin),
                 csvEscapeField(p.productName),
+                csvEscapeField(buUrl),
                 csvEscapeField(iso),
                 csvEscapeField(addressID),
             ].join(',');
@@ -8674,19 +8687,29 @@
             const asin = String(row.asin || '').trim().toUpperCase();
             const name = String(row.product_name || '').trim();
             const isoAt = String(row.saved_at || '').trim();
+            // ★v0.3.9.0: buynow_url 列を取り込み(PC版との双方向連携)。
+            const buUrl = String(row.buynow_url || '').trim();
             if (!/^[A-Z0-9]{10}$/.test(asin)) {
                 result.invalid++;
                 continue;
             }
+            const existingUrl = localStorage.getItem('LB_AM_BUYNOW_URL_' + asin);
             const existingAsinOnly = localStorage.getItem('LB_AM_ASIN_ONLY_' + asin);
-            if (existingAsinOnly) {
+            if (existingUrl || existingAsinOnly) {
                 result.skipped++;
                 continue;
             }
             try {
                 let atMs = Date.parse(isoAt);
                 if (!Number.isFinite(atMs)) atMs = Date.now();
-                localStorage.setItem('LB_AM_ASIN_ONLY_' + asin, String(atMs));
+                if (buUrl && /\/checkout\/entry\/buynow/.test(buUrl)) {
+                    // 完成 B方式 URL あり → TRANS-AM 可として復元(ASIN_ONLY より強い)
+                    localStorage.setItem('LB_AM_BUYNOW_URL_' + asin, buUrl);
+                    localStorage.setItem('LB_AM_BUYNOW_URL_' + asin + '_AT', String(atMs));
+                } else {
+                    // URL なし → 候補(ASIN_ONLY)として登録
+                    localStorage.setItem('LB_AM_ASIN_ONLY_' + asin, String(atMs));
+                }
                 if (name) localStorage.setItem('LB_AM_PRODUCT_NAME_' + asin, name);
                 result.added++;
             } catch (e) {
