@@ -118,7 +118,7 @@
 
     <!-- インストールボタン(raw .user.js 直リンク) -->
     <a class="install" href="https://raw.githubusercontent.com/hiro20926/gandam/main/amazon/gundambot-amazon.user.js">⬇ GUNDAMBOT (Amazon) をインストール</a>
-    <div class="install-ver">この版: <b>v0.3.8.97</b></div>
+    <div class="install-ver">この版: <b>v<span class="ver">0.3.8.99</span></b></div>
   </div>
 
   <section>
@@ -137,7 +137,7 @@
       <div class="step"><div class="n">1</div><div class="body"><b>App Store</b> で <b>「Userscripts」</b>(作者: Justin Wasack)を無料インストール。</div></div>
       <div class="step"><div class="n">2</div><div class="body"><b>iOS設定 → Safari → 拡張機能 → Userscripts を ON</b>、<b>すべてのサイトで許可</b>。</div></div>
       <div class="step"><div class="n">3</div><div class="body">上の <b>「⬇ インストール」</b> をタップ → Userscripts の <b>Save / Install</b>。<br>※ 旧 Netlify版が入っていたら Userscripts アプリで <b>削除</b>(競合防止)。</div></div>
-      <div class="step"><div class="n">4</div><div class="body">Safari で <code>amazon.co.jp</code> の商品ページを開く → 右下にパネル(<b>v0.3.8.97</b>)が出れば成功。</div></div>
+      <div class="step"><div class="n">4</div><div class="body">Safari で <code>amazon.co.jp</code> の商品ページを開く → 右下にパネル(<b>v<span class="ver">0.3.8.99</span></b>)が出れば成功。</div></div>
       <div class="step"><div class="n">5</div><div class="body">パネル <b>⚙設定</b> で Discord webhook を入力(任意)。あとは <b>🛒 / ⚡TRANS-AM / 🏠</b> で運用開始。</div></div>
     </div>
   </section>
@@ -146,6 +146,20 @@
     <span class="ico">💡</span>設定・購入・通知 ── すべて UserScript 内で完結。Discord webhook はこの端末にのみ保存され、別ドメインへの送信や外部アカウント登録はありません。更新は <code>@updateURL</code> で自動。
   </div>
 
-  <div class="build">build: v0.3.8.97 / 2026-06-07 JST / hiro20926/gandam · amazon/</div>
+  <div class="build">build: v<span class="ver">0.3.8.99</span> / hiro20926/gandam · amazon/</div>
+
+  <!-- ★v2: バージョンは userscript の @version を読んで自動表示(手動更新不要) -->
+  <script>
+    (function () {
+      fetch('./gundambot-amazon.user.js', { cache: 'no-store' })
+        .then(function (r) { return r.text(); })
+        .then(function (t) {
+          var m = t.match(/@version\s+([0-9.]+)/);
+          if (!m) return;
+          Array.prototype.forEach.call(document.querySelectorAll('.ver'), function (el) { el.textContent = m[1]; });
+        })
+        .catch(function () {});
+    })();
+  </script>
 </body>
 </html>
