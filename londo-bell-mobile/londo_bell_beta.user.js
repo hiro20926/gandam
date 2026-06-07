@@ -115,6 +115,8 @@
     'preferredTime1', 'preferredTime2', 'preferredTime3',
     'preferredTime4', 'preferredTime5',
     'agreeTerms',
+    // rev17: Discord Webhook URL（任意、空なら通知無効）
+    'discordWebhookUrl',
   ];
 
   const __LB_STORE_OPTIONS = [
@@ -208,6 +210,78 @@
   const __LB_RUNTIME_CONFIG = __lbMergePrefs(USER_CONFIG);
 
   // ============================================================
+  // rev17: Discord Webhook 通知
+  //   - localStorage に discordWebhookUrl が保存されている時のみ送信
+  //   - 同 event を 15 秒以内に再送信しない（dedupe ガード、PC 版の notifyOnce 互換）
+  //   - 送信失敗してもツール動作は継続（catch でログのみ）
+  // ============================================================
+  const __LB_DISCORD_DEDUPE_MS = 15000;
+
+  function __lbGetDiscordWebhookUrl() {
+    try {
+      const raw = localStorage.getItem(__LB_STORAGE_PREFIX + __LB_PREFS_STORAGE_KEY);
+      if (!raw) return '';
+      const prefs = JSON.parse(raw);
+      const url = (prefs && prefs.discordWebhookUrl) || '';
+      // Discord Webhook の URL 形式を簡易チェック
+      if (!/^https?:\/\//.test(url)) return '';
+      return url;
+    } catch(e) { return ''; }
+  }
+
+  function __lbDiscordSendRaw(webhookUrl, payload) {
+    try {
+      return fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+    } catch(e) {
+      console.error('[LB-DISCORD] fetch error:', e);
+      return Promise.reject(e);
+    }
+  }
+
+  function __lbDiscordNotify(eventType, content, opts) {
+    opts = opts || {};
+    const webhookUrl = __lbGetDiscordWebhookUrl();
+    if (!webhookUrl) return;  // 設定なし → 送らない
+
+    // 15 秒以内の同 event は無視（重複通知防止）
+    if (opts.dedupe !== false) {
+      const dedupeKey = 'discord_notified_' + eventType + '_at';
+      try {
+        const last = GM_getValue(dedupeKey, 0);
+        const now = Date.now();
+        if (now - last < __LB_DISCORD_DEDUPE_MS) {
+          console.log('[LB-DISCORD] dedupe skip:', eventType);
+          return;
+        }
+        GM_setValue(dedupeKey, now);
+      } catch(e) {}
+    }
+
+    // ヘッダーに店舗名・申込者情報をつける（ユーザーが識別しやすいよう）
+    let header = '';
+    try {
+      const cur = __lbMergePrefs(USER_CONFIG);
+      const name = ((cur.sei || '') + ' ' + (cur.mei || '')).trim();
+      header = '`' + (cur.storeName || '') + '`' + (name ? ' · ' + name : '');
+    } catch(e) {}
+
+    const fullContent = header ? (header + '\n' + content) : content;
+    __lbDiscordSendRaw(webhookUrl, { content: fullContent })
+      .then(function(r) {
+        if (r && r.ok) {
+          console.log('[LB-DISCORD] sent:', eventType);
+        } else {
+          console.warn('[LB-DISCORD] HTTP not OK:', r && r.status);
+        }
+      })
+      .catch(function(e) { console.error('[LB-DISCORD] send error:', e); });
+  }
+
+  // ============================================================
   // Chrome API スタブ（PC版コードがそのまま動くように偽装）
   // ============================================================
   if (typeof window.chrome === 'undefined' || !window.chrome.runtime) {
@@ -219,7 +293,7 @@
         try {
           const a = msg && msg.action;
           if (a === 'apiPollingStarted')        __lbToast('🔄 API監視開始: ' + (msg.storeName || ''));
-          else if (a === 'webTicketDetected')   __lbToast('🎫 WEB整理券フラグON！ ' + (msg.storeName || ''), '#ffd700');
+          else if (a === 'webTicketDetected')   { __lbToast('🎫 WEB整理券フラグON！ ' + (msg.storeName || ''), '#ffd700'); __lbDiscordNotify('webTicketDetected', '🎫 **WEB整理券フラグON** ' + (msg.storeName || '')); }
           else if (a === 'buttonFound')         __lbToast('🎯 ' + (msg.buttonText || 'ボタン'), '#4cc982');
           else if (a === 'formFilled')          __lbToast('📝 フォーム入力完了');
           else if (a === 'monitoringStarted')   __lbToast('▶️ 監視開始');
@@ -227,9 +301,13 @@
           else if (a === 'confirmMonitoringStarted') __lbToast('🔍 /confirm 監視開始');
           else if (a === 'confirmButtonClicked')__lbToast('✅ 確認ボタンクリック');
           else if (a === 'timeSlotError')       __lbToast('⚠️ 時間枠エラー', '#ff9d6b');
-          else if (a === 'loginRedirected')     __lbToast('🚨 /login 検知！手動ログイン必要', '#ff5c5c');
-          else if (a === 'retryLimitReached')   __lbToast('⛔ 再試行上限', '#ff5c5c');
+          else if (a === 'loginRedirected')     { __lbToast('🚨 /login 検知！手動ログイン必要', '#ff5c5c'); __lbDiscordNotify('loginRedirected', '🚨 **ログイン画面に遷移** — 手動ログインが必要です'); }
+          else if (a === 'retryLimitReached')   { __lbToast('⛔ 再試行上限', '#ff5c5c'); __lbDiscordNotify('retryLimitReached', '⛔ **再試行上限に達しました**'); }
           else if (a === 'retrying')            __lbToast('🔁 再試行中 ' + (msg.retryCount || ''));
+          // rev17: Discord 通知（最重要 event）
+          else if (a === 'applicationSuccess')  __lbDiscordNotify('applicationSuccess', '✅ **GUNDAM BASE 抽選申込完了！**');
+          else if (a === 'applicationFailed')   __lbDiscordNotify('applicationFailed', '❌ **GUNDAM BASE 抽選失敗**' + (msg.reason ? ' (' + msg.reason + ')' : ''));
+          else if (a === 'smsRequired')         __lbDiscordNotify('smsRequired', '📱 **SMS 認証画面に到達** — コードを入力してください');
           // debugLog: console + 進捗系メッセージは画面トーストにも出す
           if (a === 'debugLog' && msg.message) {
             console.log('[LB-DBG]', msg.message);
@@ -1899,6 +1977,19 @@
                 '※ 希望時間は画面右下窓「希望時間」アコーディオンから変更してください' +
               '</p>' +
             '</section>' +
+            // rev17: Discord 通知（任意）
+            '<section class="__lb_sheet_section">' +
+              '<h3>📡 Discord 通知（任意）</h3>' +
+              '<div class="__lb_sheet_row">' +
+                '<label>Webhook URL</label>' +
+                '<input type="url" id="__lb_sheet_discord" placeholder="https://discord.com/api/webhooks/..." autocomplete="off" spellcheck="false" />' +
+                '<small>※ 抽選成功・失敗・SMS認証必要・ログイン要求時に Discord に通知。空欄で無効。</small>' +
+              '</div>' +
+              '<div class="__lb_sheet_row">' +
+                '<button type="button" class="__lb_sheet_alarm_btn" id="__lb_sheet_discord_test_btn">🧪 テスト送信</button>' +
+                '<small>※ 入力した URL に「テスト通知」を 1 件送信します。保存前にも動作確認可能。</small>' +
+              '</div>' +
+            '</section>' +
             '<section class="__lb_sheet_section">' +
               '<h3>⏰ 抽選アラーム（Apple Calendar 連携）</h3>' +
               '<div class="__lb_sheet_row">' +
@@ -1921,6 +2012,11 @@
         document.getElementById('__lb_sheet_close').addEventListener('click', function() { closeSettingsSheet(); });
         document.getElementById('__lb_sheet_save_btn').addEventListener('click', function() { __lbSaveSettings(); });
         document.getElementById('__lb_sheet_alarm_btn').addEventListener('click', function() { __lbHandleAlarmRegister(); });
+        // rev17: Discord テスト送信
+        const __lb_discord_test_btn = document.getElementById('__lb_sheet_discord_test_btn');
+        if (__lb_discord_test_btn) {
+          __lb_discord_test_btn.addEventListener('click', function() { __lbHandleDiscordTest(); });
+        }
 
         // スワイプダウンで閉じる（ハンドル部分のみ）
         __lbBindSheetSwipeDown(sh);
@@ -1977,18 +2073,22 @@
     setVal('__lb_sheet_phone',   cur.phoneNumber || '');
     setVal('__lb_sheet_store',   cur.storeName || 'THE GUNDAM BASE TOKYO');
     setVal('__lb_sheet_date',    cur.preferredDate || '');
+    // rev17: Discord Webhook URL
+    setVal('__lb_sheet_discord', cur.discordWebhookUrl || '');
   }
 
   // 現在のフォーム入力値を prefs オブジェクトに収集（bottom sheet で扱う項目のみ）
   // rev16.4: 希望時間 / プロファイル名は除外
+  // rev17: discordWebhookUrl は追加
   function __lbCollectSheetForm() {
     function v(id) { const el = document.getElementById(id); return el ? el.value : ''; }
     return {
-      sei:            (v('__lb_sheet_sei') || '').trim(),
-      mei:            (v('__lb_sheet_mei') || '').trim(),
-      phoneNumber:    (v('__lb_sheet_phone') || '').trim(),
-      storeName:      v('__lb_sheet_store'),
-      preferredDate:  v('__lb_sheet_date'),
+      sei:               (v('__lb_sheet_sei') || '').trim(),
+      mei:               (v('__lb_sheet_mei') || '').trim(),
+      phoneNumber:       (v('__lb_sheet_phone') || '').trim(),
+      storeName:         v('__lb_sheet_store'),
+      preferredDate:     v('__lb_sheet_date'),
+      discordWebhookUrl: (v('__lb_sheet_discord') || '').trim(),
       agreeTerms: true,
     };
   }
@@ -2021,13 +2121,14 @@
       } catch(e) { /* 破損なら空から */ }
       // bottom sheet 管理項目のみ上書き
       // rev16.4: 希望時間 (preferredTime1〜5) は窓側アコーディオン専用、ここでは触らない
-      prefs.sei           = formPrefs.sei;
-      prefs.mei           = formPrefs.mei;
-      prefs.phoneNumber   = formPrefs.phoneNumber;
-      prefs.storeName     = formPrefs.storeName;
-      prefs.preferredDate = formPrefs.preferredDate;
-      prefs.agreeTerms    = true;
-      prefs._updated_at   = Date.now();
+      prefs.sei               = formPrefs.sei;
+      prefs.mei               = formPrefs.mei;
+      prefs.phoneNumber       = formPrefs.phoneNumber;
+      prefs.storeName         = formPrefs.storeName;
+      prefs.preferredDate     = formPrefs.preferredDate;
+      prefs.discordWebhookUrl = formPrefs.discordWebhookUrl;  // rev17
+      prefs.agreeTerms        = true;
+      prefs._updated_at       = Date.now();
       // 注意: preferredTime1〜5 / profileName は触らない（窓側 or USER_CONFIG が管理）
       try {
         localStorage.setItem(key, JSON.stringify(prefs));
@@ -2155,6 +2256,41 @@
     } catch(e) {
       console.error('[LB-ICS] download error:', e);
       return false;
+    }
+  }
+
+  // rev17: Discord テスト送信ボタン
+  //   sheet で入力中の値を直接使う（保存前でも検証可能）
+  //   dedupe ガードはスキップ（テストは何度押してもすぐ送りたい）
+  function __lbHandleDiscordTest() {
+    try {
+      const el = document.getElementById('__lb_sheet_discord');
+      const url = ((el && el.value) || '').trim();
+      if (!url) {
+        __lbToast('⚠️ Webhook URL を入力してください', '#ff6b6b');
+        return;
+      }
+      if (!/^https?:\/\//.test(url)) {
+        __lbToast('⚠️ URL は http(s):// から始めてください', '#ff6b6b');
+        return;
+      }
+      __lbToast('🔄 Discord に送信中...', '#7FA5D4');
+      __lbDiscordSendRaw(url, {
+        content: '🧪 **LONDO BELL Mobile** からのテスト通知です\n（このメッセージが見えていれば Webhook 設定 OK）'
+      })
+        .then(function(r) {
+          if (r && r.ok) {
+            __lbToast('✅ テスト送信成功 (HTTP ' + r.status + ')', '#4cc982');
+          } else {
+            __lbToast('❌ 送信失敗 HTTP ' + (r ? r.status : '?'), '#ff5c5c');
+          }
+        })
+        .catch(function(e) {
+          __lbToast('❌ 送信失敗: ' + (e && e.message || e), '#ff5c5c');
+        });
+    } catch(e) {
+      console.error('[LB-DISCORD-TEST] error:', e);
+      __lbToast('❌ テスト送信エラー: ' + e.message, '#ff5c5c');
     }
   }
 
