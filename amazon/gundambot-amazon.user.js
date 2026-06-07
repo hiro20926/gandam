@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.3.8.97
+// @version      0.3.8.98
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -14,7 +14,24 @@
 
 // ==================================================================
 // Build:    2026-06-07 (JST)
-// Version:  v0.3.8.97 (gandam repo を bot別サブフォルダに整理 / @updateURL を amazon/ パスへ)
+// Version:  v0.3.8.98 (⚙ボタン死亡バグ修正 + 🛒新規開始で商品データに候補登録)
+//
+// v0.3.8.98 (2026-06-07 HIRO 報告 3点):
+//   ① ⚙設定ボタンが無反応 → 修正:
+//      v0.3.8.96 の ⚙ ダイアログが escHtml() を参照していたが、escHtml は
+//      商品データパネル内のローカル定義でこのスコープに存在せず、ReferenceError →
+//      try/catch に飲まれてダイアログが出ず「ボタンが死んでる」状態だった。
+//      → ⚙ ハンドラ専用の esc() を定義して解決。Discord webhook 設定が開けるように。
+//   ② 🛒新規開始で商品データに登録されない → 修正:
+//      新規開始した時点で ASIN を LB_AM_ASIN_ONLY_<ASIN> で候補登録。
+//      TRANS-AM URL 未取得でも「📦商品データ」に「🔒 URL未取得」として残る。
+//      後で URL が取れれば自動で「⚡TRANS-AM 可」に昇格。
+//   ③ 確定前で止まるパターン増加 → 解析のみ(購入ロジックは未変更):
+//      ログ上、itemselect/Chewbacca 画面で「数量更新」(在庫が瞬間枯渇)を検出 →
+//      qty_stop=OFF のためループ継続 = 確定に至らず。在庫争奪が主因。
+//      対処方針は HIRO と相談の上で別途(購入ロジックは慎重に扱う)。
+//
+// v0.3.8.97 (2026-06-07 リポジトリ整理):
 //
 // v0.3.8.97 (2026-06-07 リポジトリ整理):
 //   gandam リポジトリ(全bot統合)で Amazon を直下 → amazon/ サブフォルダに移動。
@@ -3260,7 +3277,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.3.8.97';
+    const SCRIPT_VERSION = '0.3.8.98';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -4963,6 +4980,11 @@
         document.getElementById('lb-am-btn-cfg').addEventListener('click', () => {
             if (CONFIG.configPageUrl) { location.href = CONFIG.configPageUrl; return; }
             try {
+                // ★v0.3.8.98 修正: escHtml は商品データパネル内ローカル定義でこのスコープに無い
+                //   → 参照すると ReferenceError で例外 → try/catch に飲まれて「⚙ボタン無反応」化していた。
+                //   ここ専用の esc を定義して使う。
+                const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+                    ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
                 const cur = (function(){ try { return localStorage.getItem(KEY_DISCORD_WEBHOOK) || ''; } catch(e){ return ''; } })();
                 const masked = cur ? (cur.slice(0, 40) + '…(設定済)') : '(未設定=通知OFF)';
                 const dlg = document.createElement('div');
@@ -4973,7 +4995,7 @@
                     'border-radius:10px;padding:18px;font-family:sans-serif;color:#d0e8f5;">' +
                       '<div style="font-size:15px;font-weight:bold;color:#5dd5e5;margin-bottom:10px;">⚙ 設定</div>' +
                       '<div style="font-size:12px;color:#7bb8d8;margin-bottom:4px;">Discord webhook URL(通知用・任意)</div>' +
-                      '<div style="font-size:11px;color:#9fd0e0;margin-bottom:6px;">現在: ' + escHtml(masked) + '</div>' +
+                      '<div style="font-size:11px;color:#9fd0e0;margin-bottom:6px;">現在: ' + esc(masked) + '</div>' +
                       '<input id="lb-am-cfg-webhook" type="text" placeholder="https://discord.com/api/webhooks/..." ' +
                         'style="width:100%;padding:8px;box-sizing:border-box;font-family:monospace;font-size:11px;' +
                         'background:#06131c;color:#b8e8d0;border:1px solid rgba(93,213,229,0.4);border-radius:5px;">' +
@@ -11789,6 +11811,22 @@
                   STOP_RED, 5000);
             return;
         }
+
+        // ★v0.3.8.98: 新規開始した時点で、その商品を「📦商品データ」に候補登録
+        //   HIRO 指摘: TRANS-AM URL がまだ取れていなくても、🛒を押した商品は
+        //   商品データに残るべき(後で URL が取れれば自動で「⚡TRANS-AM 可」に昇格)。
+        //   直販 URL 未取得 = ASIN_ONLY 仮登録(listSavedProducts が「🔒 URL未取得」で表示)。
+        try {
+            const _asinNew = extractAsinFromUrl();
+            if (_asinNew && /^[A-Z0-9]{10}$/.test(_asinNew)) {
+                // 既に完成 URL があるなら ASIN_ONLY は付けない(昇格済みを維持)
+                if (!hasSavedTransAmUrl(_asinNew) && !localStorage.getItem('LB_AM_ASIN_ONLY_' + _asinNew)) {
+                    localStorage.setItem('LB_AM_ASIN_ONLY_' + _asinNew, String(Date.now()));
+                    try { logAm('info', 'products-auto-add',
+                        '🛒新規開始 → 商品データに候補登録 (ASIN_ONLY)', { asin: _asinNew }); } catch (e) {}
+                }
+            }
+        } catch (e) {}
 
         S.opStart(location.href);
         try {
