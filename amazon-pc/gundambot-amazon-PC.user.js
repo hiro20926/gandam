@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.0.2
+// @version      1.0.3
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.0.2';
+    const SCRIPT_VERSION = 'PC-1.0.3';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -4708,6 +4708,29 @@
               background: rgba(255,128,216,0.14);
               border-color: var(--ta-pink-soft);
               color: var(--ta-pink-soft);}
+            /* ★PC版: 🔄巡回購入 — OFF=シアン(テーマ統一) / ON=緑(巡回中)。data-on で切替 */
+            #lb-am-btn-rotation{
+              font-size: 12px;
+              padding: 9px 12px;
+              background: rgba(128,224,255,0.06);
+              color: #b8d8e8;
+              border-color: rgba(128,224,255,0.4);
+              text-shadow: 0 0 4px rgba(93,213,229,0.4), 1px 1px 0 rgba(0,0,0,0.5);
+              box-shadow: inset 0 1px 0 rgba(128,224,255,0.06);}
+            #lb-am-btn-rotation:hover{
+              background: rgba(128,224,255,0.14);
+              border-color: #5dd5e5;
+              color: #d0e8f5;
+              box-shadow: inset 0 1px 0 rgba(128,224,255,0.08), 0 0 14px rgba(93,213,229,0.32);}
+            #lb-am-btn-rotation[data-on="1"]{
+              background: rgba(46,196,127,0.20);
+              color: #9effc4;
+              border-color: rgba(46,196,127,0.6);}
+            #lb-am-btn-rotation[data-on="1"]:hover{
+              background: rgba(46,196,127,0.32);
+              border-color: rgba(80,240,160,0.85);
+              color: #c0ffd8;
+              box-shadow: inset 0 1px 0 rgba(80,240,160,0.10), 0 0 12px rgba(46,196,127,0.35);}
             /* v0.3.8.75: 🛑 数量更新トグル — ON=赤系 (停止) / OFF=橙系 (無視)
                data-on 属性で 2 状態を切替。視認性最優先で TRANS-AM 中も同色維持 */
             #lb-am-btn-qty-stop{
@@ -5149,19 +5172,23 @@
         // ───── 🔄 巡回購入 トグル(PC版:複数商品を順に巡る) ─────
         const rotationBtn = document.getElementById('lb-am-btn-rotation');
         if (rotationBtn) {
+            const applyRotBtn = (on) => {
+                rotationBtn.setAttribute('data-on', on ? '1' : '0');
+                rotationBtn.textContent = on ? '🔄 巡回:ON' : '🔄 巡回購入';
+            };
             rotationBtn.addEventListener('click', () => {
                 try {
                     const on = !isRotationOn();
                     localStorage.setItem('LB_AM_ROT_ON', on ? '1' : '0');
                     if (on) localStorage.setItem('LB_AM_ROT_IDX', '0');
-                    const n = listSavedProducts().length;
+                    const n = getRotationList().length;
                     toast(on
-                        ? '🔄 巡回購入 ON(登録 ' + n + ' 件を順に巡回)\n🛒新規開始 を押すと巡回します'
+                        ? '🔄 巡回購入 ON(巡回ON ' + n + ' 件を順に巡回)\n🛒新規開始 を押すと巡回します'
                         : '🔄 巡回購入 OFF(1商品のみ監視)', on ? '#2e7d32' : '#666', 5000);
-                    rotationBtn.textContent = on ? '🔄 巡回:ON' : '🔄 巡回購入';
+                    applyRotBtn(on);
                 } catch (e) {}
             });
-            try { if (isRotationOn()) rotationBtn.textContent = '🔄 巡回:ON'; } catch (e) {}
+            try { applyRotBtn(isRotationOn()); } catch (e) {}
         }
 
         const productsBtn = document.getElementById('lb-am-btn-products');
@@ -5233,6 +5260,11 @@
                     '</div>' +
                     '<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">' +
                         '<button id="lb-am-prod-add" style="flex:1;min-width:140px;padding:11px;background:linear-gradient(180deg,rgba(46,196,127,0.95),rgba(20,140,75,0.95));color:#fff;border:0;border-radius:5px;font-size:13px;font-weight:bold;box-shadow:0 0 12px rgba(46,196,127,0.4);">➕ 候補商品 手動追加</button>' +
+                    '</div>' +
+                    // ★PC版: 巡回 全部ON / 全部OFF 一括ボタン
+                    '<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">' +
+                        '<button id="lb-am-prod-rot-all-on" style="flex:1;min-width:120px;padding:9px;background:rgba(46,196,127,0.2);border:1px solid rgba(46,196,127,0.6);color:#9effc4;border-radius:5px;font-size:12px;font-weight:bold;">🔄 全部 巡回ON</button>' +
+                        '<button id="lb-am-prod-rot-all-off" style="flex:1;min-width:120px;padding:9px;background:rgba(120,120,120,0.2);border:1px solid rgba(120,120,120,0.5);color:#ddd;border-radius:5px;font-size:12px;font-weight:bold;">⏸ 全部 巡回OFF</button>' +
                     '</div>' +
                     '<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">' +
                         '<button id="lb-am-prod-export" style="flex:1;min-width:140px;padding:11px;background:linear-gradient(180deg,rgba(93,213,229,0.95),rgba(2,136,209,0.95));color:#08151c;border:0;border-radius:5px;font-size:13px;font-weight:bold;box-shadow:0 0 12px rgba(93,213,229,0.45);">💾 CSV 書き出し</button>' +
@@ -5311,6 +5343,20 @@
                         toast('CSV 解析失敗: ' + (e && e.message ? e.message : e), STOP_RED, 6000);
                     }
                 });
+                // ★PC版: 全部 巡回ON / 全部 巡回OFF (一括)
+                const setAllRotTargets = (on) => {
+                    try {
+                        const all = listSavedProducts() || [];
+                        all.forEach(function (p) { if (p && p.asin) setRotTarget(p.asin, on); });
+                        toast(on ? '🔄 全 ' + all.length + ' 件を巡回ON' : '⏸ 全 ' + all.length + ' 件を巡回OFF', on ? '#2e7d32' : '#666', 3000);
+                        closeOv();
+                        setTimeout(() => { try { productsBtn.click(); } catch (e) {} }, 200);
+                    } catch (e) {}
+                };
+                const rotAllOnBtn = document.getElementById('lb-am-prod-rot-all-on');
+                if (rotAllOnBtn) rotAllOnBtn.addEventListener('click', () => setAllRotTargets(true));
+                const rotAllOffBtn = document.getElementById('lb-am-prod-rot-all-off');
+                if (rotAllOffBtn) rotAllOffBtn.addEventListener('click', () => setAllRotTargets(false));
                 // ★PC版: 巡回ON/OFF トグル(商品ごと) — ON にした商品だけ巡回する
                 Array.prototype.forEach.call(ov.querySelectorAll('.lb-am-prod-rot'), (btn) => {
                     btn.addEventListener('click', () => {
