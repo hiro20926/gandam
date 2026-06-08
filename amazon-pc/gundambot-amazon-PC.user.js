@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.0.0
+// @version      1.0.1
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.0.0';
+    const SCRIPT_VERSION = 'PC-1.0.1';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -7122,7 +7122,10 @@
         try { return localStorage.getItem(ROT_ON_KEY) === '1'; } catch (e) { return false; }
     };
     const rotateNextUrl = () => {
-        // 巡回ONかつ登録2件以上なら、次の商品の商品ページURLを返す。それ以外は null。
+        // 巡回ONかつ登録2件以上なら「次の登録商品」へ移動。★TRANS-AM優先(HIRO仕様):
+        //   保存buynow URL(offerListing付き)あり → TRANS-AMモードON + そのURL直撃のみ(AOD不要・最速購入)
+        //   URL未取得                          → モードOFF + /dp商品ページ(新規開始でBuyBox/AOD→URL取得)
+        // ※購入フロー本体・別商品ガードは無変更。ここでモード切替とセッションproductUrl更新だけ行う。
         try {
             if (!isRotationOn()) return null;
             const list = listSavedProducts();
@@ -7135,13 +7138,42 @@
             const next = list[nextIdx];
             try { localStorage.setItem(ROT_IDX_KEY, String(nextIdx)); } catch (e) {}
             if (!next || !next.asin) return null;
-            const ts = String(Date.now());
-            const u = new URL('https://www.amazon.co.jp/dp/' + next.asin);
-            u.searchParams.set('m', AMAZON_SELLER_ID);   // Amazon直販をBuy Boxに強制
-            u.searchParams.set('_pageRefresh', ts);
-            u.searchParams.set('_sw', ts);
-            try { logAm('info', 'rotation', '🔄 次の商品へ巡回', { nextAsin: next.asin, idx: nextIdx, total: list.length }); } catch (e) {}
-            return u.toString();
+
+            // 次商品が TRANS-AM 可(有効な保存 buynow URL あり)か判定
+            let savedUrl = '';
+            try { if (hasSavedTransAmUrl(next.asin)) savedUrl = getSavedTransAmUrl(next.asin) || ''; } catch (e) { savedUrl = ''; }
+
+            let targetUrl, transAm;
+            if (savedUrl) {
+                targetUrl = savedUrl;            // ⚡ buynow 直撃のみ(AOD不要・最速購入)
+                transAm = true;
+            } else {
+                const ts0 = String(Date.now());
+                const u = new URL('https://www.amazon.co.jp/dp/' + next.asin);
+                u.searchParams.set('m', AMAZON_SELLER_ID);   // Amazon直販をBuy Boxに強制
+                u.searchParams.set('_pageRefresh', ts0);
+                u.searchParams.set('_sw', ts0);
+                targetUrl = u.toString();        // 商品ページ(新規開始で BuyBox/AOD)
+                transAm = false;
+            }
+
+            // ★巡回でセッションを次商品へ引き継ぐ(購入本体は無変更):
+            //   ① モードフラグを次商品に合わせる(opStart/opStartTransAm と同じ規約)
+            //   ② 前商品の直販確認済タイムスタンプはクリア(別商品へ持ち越さない)
+            //   ③ セッションの productUrl を次商品に更新 → 別商品ガードに引っかからない
+            try {
+                if (transAm) localStorage.setItem('LB_AM_TRANS_AM_MODE', '1');
+                else localStorage.removeItem('LB_AM_TRANS_AM_MODE');
+            } catch (e) {}
+            try { localStorage.removeItem('LB_AM_VERIFIED_DIRECT'); } catch (e) {}
+            try { S.updateSession({ productUrl: targetUrl }); } catch (e) {}
+
+            try {
+                logAm('info', 'rotation',
+                    transAm ? '🔄⚡ 次の商品へ巡回(TRANS-AM直撃)' : '🔄 次の商品へ巡回(新規開始/AOD)',
+                    { nextAsin: next.asin, idx: nextIdx, total: list.length, transAm: transAm });
+            } catch (e) {}
+            return targetUrl;
         } catch (e) { return null; }
     };
 
