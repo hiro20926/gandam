@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.0.3
+// @version      1.0.4
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.0.3';
+    const SCRIPT_VERSION = 'PC-1.0.4';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -14321,6 +14321,18 @@
         // 人間っぽい読み時間
         await sleep(readingDelayMs);
         if (S.shouldHalt()) return;
+
+        // ★PC版 巡回ON: TRANS-AM在庫切れ時は「同じ商品の即リトライ」でなく「次の登録商品」へ移動。
+        //   これが無いと TRANS-AM 経路は scheduleReloadForWait を通らず 1 商品ループに陥る(実機ログで確認)。
+        //   巡回OFF時は rotateNextUrl() が null を返すので、従来の TRANS-AM 即リトライにフォールスルー。
+        try {
+            const _rotUrl = rotateNextUrl();
+            if (_rotUrl) {
+                try { logAm('info', 'rotation', '🔄 在庫切れ → 次の商品へ巡回(TRANS-AM経路)', { fromAsin: asin }); } catch (e) {}
+                location.href = _rotUrl;
+                return;
+            }
+        } catch (e) {}
 
         // 分岐: TRANS-AM URL あり + 偽装サイクルじゃない → 直接 TRANS-AM URL
         //       それ以外 → 商品ページに戻す (従来動作)
