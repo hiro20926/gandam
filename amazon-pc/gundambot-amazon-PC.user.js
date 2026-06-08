@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.0.5
+// @version      1.0.6
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.0.5';
+    const SCRIPT_VERSION = 'PC-1.0.6';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -5624,10 +5624,33 @@
                         added++;
                     });
                     toast('➕ ' + added + ' 件を仮登録' + (dup ? ' / ' + dup + ' 件は既存' : '') +
-                          '\n各商品ページで 🛒 すると完成URLに昇格', BUY_GREEN, 8000);
+                          '\n🔎 商品名を背景取得します', BUY_GREEN, 6000);
                     try { logAm('info', 'products-manual-add', '商品データ一括追加', { added: added, dup: dup, total: asins.length }); } catch (e) {}
+                    // ★PC版: 追加した商品の商品名を背景fetchで自動取得(画面遷移なし、連続アクセス回避で順次0.9秒間隔)
+                    const nameTargets = asins.filter(function (a) {
+                        return !(localStorage.getItem('LB_AM_PRODUCT_NAME_' + a)) && localStorage.getItem('LB_AM_ASIN_ONLY_' + a);
+                    });
                     closeOv();
-                    setTimeout(() => { try { productsBtn.click(); } catch (e) {} }, 400);
+                    setTimeout(() => { try { productsBtn.click(); } catch (e) {} }, 300);
+                    if (nameTargets.length) {
+                        (async function () {
+                            let got = 0;
+                            for (let i = 0; i < nameTargets.length; i++) {
+                                const a = nameTargets[i];
+                                try {
+                                    const meta = await fetchProductMeta(a);
+                                    if (meta && meta.name) { try { localStorage.setItem('LB_AM_PRODUCT_NAME_' + a, meta.name.slice(0, 200)); got++; } catch (e) {} }
+                                    if (meta && meta.img) { try { localStorage.setItem('LB_AM_PRODUCT_IMG_' + a, meta.img); } catch (e) {} }
+                                } catch (e) {}
+                                await new Promise(function (r) { setTimeout(r, 900); });
+                            }
+                            try {
+                                toast('✅ 商品名 取得完了 (' + got + '/' + nameTargets.length + '件)', BUY_GREEN, 4000);
+                                logAm('info', 'products-name-fetch', '一括追加の商品名 背景取得', { got: got, total: nameTargets.length });
+                                if (document.getElementById('lb-am-products-overlay')) { closeOv(); setTimeout(function () { try { productsBtn.click(); } catch (e) {} }, 100); }
+                            } catch (e) {}
+                        })();
+                    }
                 });
             } catch (e) {
                 toast('オーバーレイ表示失敗: ' + e.message, STOP_RED, 5000);
