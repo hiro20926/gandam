@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.0.4
+// @version      1.0.5
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.0.4';
+    const SCRIPT_VERSION = 'PC-1.0.5';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -5259,7 +5259,7 @@
                         '<button id="lb-am-prod-close" style="padding:8px 14px;background:rgba(255,77,77,0.7);color:#fff;border:0;border-radius:5px;font-size:13px;">✕ 閉じる</button>' +
                     '</div>' +
                     '<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">' +
-                        '<button id="lb-am-prod-add" style="flex:1;min-width:140px;padding:11px;background:linear-gradient(180deg,rgba(46,196,127,0.95),rgba(20,140,75,0.95));color:#fff;border:0;border-radius:5px;font-size:13px;font-weight:bold;box-shadow:0 0 12px rgba(46,196,127,0.4);">➕ 候補商品 手動追加</button>' +
+                        '<button id="lb-am-prod-add" style="flex:1;min-width:140px;padding:11px;background:linear-gradient(180deg,rgba(46,196,127,0.95),rgba(20,140,75,0.95));color:#fff;border:0;border-radius:5px;font-size:13px;font-weight:bold;box-shadow:0 0 12px rgba(46,196,127,0.4);">➕ 商品追加(ASIN複数OK)</button>' +
                     '</div>' +
                     // ★PC版: 巡回 全部ON / 全部OFF 一括ボタン
                     '<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">' +
@@ -5587,43 +5587,45 @@
                     let input = null;
                     try {
                         input = prompt(
-                            '商品 URL or ASIN を貼り付けてください:\n\n' +
-                            '例 1: https://www.amazon.co.jp/dp/B07YY9MRJZ\n' +
-                            '例 2: B07YY9MRJZ\n' +
-                            '例 3: https://www.amazon.co.jp/dp/B07YY9MRJZ?m=AN1VRQENFRJN5'
+                            '商品 URL / ASIN を貼り付け(複数OK・改行/スペース/カンマ区切り):\n\n' +
+                            '例: B07YY9MRJZ B0DTY5S74W B09Q6GH9HN\n' +
+                            'または https://www.amazon.co.jp/dp/B07YY9MRJZ を改行で複数行'
                         );
                     } catch (e) {}
                     if (!input) return;
-                    const inputStr = String(input).trim();
-                    let asin = '';
-                    const m1 = inputStr.match(/\/(?:dp|gp\/product|gp\/aw\/d)\/([A-Z0-9]{10})/i);
-                    if (m1) asin = m1[1].toUpperCase();
-                    else if (/^[A-Z0-9]{10}$/i.test(inputStr)) asin = inputStr.toUpperCase();
-                    if (!asin || !/^[A-Z0-9]{10}$/.test(asin)) {
-                        toast('❌ ASIN を抽出できません\n10 桁の英数字または商品 URL を入力してください', STOP_RED, 8000);
+                    // 複数トークンに分割 (改行/カンマ/空白/タブ)
+                    const tokens = String(input).split(/[\s,]+/).map(function (s) { return s.trim(); }).filter(Boolean);
+                    const asins = [];
+                    const seen = {};
+                    tokens.forEach(function (tok) {
+                        let a = '';
+                        const m1 = tok.match(/\/(?:dp|gp\/product|gp\/aw\/d)\/([A-Z0-9]{10})/i);
+                        if (m1) a = m1[1].toUpperCase();
+                        else if (/^[A-Z0-9]{10}$/i.test(tok)) a = tok.toUpperCase();
+                        if (a && /^[A-Z0-9]{10}$/.test(a) && !seen[a]) { seen[a] = 1; asins.push(a); }
+                    });
+                    if (!asins.length) {
+                        toast('❌ ASIN を抽出できません\n10桁の英数字 または 商品URL を入力してください', STOP_RED, 8000);
                         return;
                     }
-                    // 既に保存済みかチェック
-                    const existingUrl = localStorage.getItem('LB_AM_BUYNOW_URL_' + asin);
-                    const existingAsinOnly = localStorage.getItem('LB_AM_ASIN_ONLY_' + asin);
-                    if (existingUrl || existingAsinOnly) {
-                        toast('ℹ️ ' + asin + ' は既に登録済みです', '#ed6c02', 6000);
-                        return;
-                    }
-                    // 商品名入力 (オプション)
-                    let name = '';
-                    try { name = prompt('商品名 (空欄可、後で商品ページで自動取得):') || ''; } catch (e) {}
-                    name = name.trim().slice(0, 200);
-                    saveAsinOnlyRecord(asin, name);
-                    // 並び順の先頭に追加
-                    try {
-                        const order = getProductOrder();
-                        const filtered = order.filter(a => a !== asin);
-                        filtered.unshift(asin);
-                        setProductOrder(filtered);
-                    } catch (e) {}
-                    toast('➕ ' + asin + (name ? ' (' + name.slice(0, 30) + ')' : '') + ' を仮登録\n商品ページに飛んで 🛒 すると完成 URL に昇格', BUY_GREEN, 8000);
-                    try { logAm('info', 'products-manual-add', '商品データ手動追加', { asin: asin, name: name }); } catch (e) {}
+                    let added = 0, dup = 0;
+                    asins.forEach(function (asin) {
+                        const existingUrl = localStorage.getItem('LB_AM_BUYNOW_URL_' + asin);
+                        const existingAsinOnly = localStorage.getItem('LB_AM_ASIN_ONLY_' + asin);
+                        if (existingUrl || existingAsinOnly) { dup++; return; }
+                        saveAsinOnlyRecord(asin, '');
+                        // 並び順の先頭に追加
+                        try {
+                            const order = getProductOrder();
+                            const filtered = order.filter(function (x) { return x !== asin; });
+                            filtered.unshift(asin);
+                            setProductOrder(filtered);
+                        } catch (e) {}
+                        added++;
+                    });
+                    toast('➕ ' + added + ' 件を仮登録' + (dup ? ' / ' + dup + ' 件は既存' : '') +
+                          '\n各商品ページで 🛒 すると完成URLに昇格', BUY_GREEN, 8000);
+                    try { logAm('info', 'products-manual-add', '商品データ一括追加', { added: added, dup: dup, total: asins.length }); } catch (e) {}
                     closeOv();
                     setTimeout(() => { try { productsBtn.click(); } catch (e) {} }, 400);
                 });
