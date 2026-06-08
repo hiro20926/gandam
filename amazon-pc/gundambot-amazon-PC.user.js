@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.0.7
+// @version      1.0.9
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.0.7';
+    const SCRIPT_VERSION = 'PC-1.0.9';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -5203,8 +5203,8 @@
                     position:'fixed', top:'0', left:'0', right:'0', bottom:'0',
                     background:'rgba(2,8,14,0.96)', color:'#d0e8f5',
                     zIndex:'2147483647', overflowY:'auto',
-                    padding:'14px', fontFamily:'-apple-system, system-ui, "Yu Gothic UI", sans-serif',
-                    fontSize:'13px', whiteSpace:'normal',
+                    padding:'16px 20px', fontFamily:'-apple-system, system-ui, "Yu Gothic UI", sans-serif',
+                    fontSize:'14px', whiteSpace:'normal',
                 });
                 const products = listSavedProducts();
                 const fmtDate = (ms) => {
@@ -5234,22 +5234,18 @@
                             : '<div style="color:#5dd5e5;font-size:10px;margin-top:3px;">✅ 直販オファー記録済み</div>';
                         const isFirst = idx === 0;
                         const isLast = idx === products.length - 1;
-                        return '<div data-row-asin="' + escHtml(p.asin) + '" style="padding:10px 12px;margin-bottom:6px;background:rgba(8,18,26,0.7);border-left:3px solid ' + accentColor + ';border-radius:4px;">' +
-                            '<div style="font-weight:bold;color:' + asinColor + ';font-family:monospace;font-size:12px;">' + escHtml(p.asin) + statusBadge + '</div>' +
-                            '<div style="color:#d0e8f5;font-size:12px;margin-top:3px;">' + (p.productName ? escHtml(p.productName) : '<span style="opacity:0.5;">(商品名未取得)</span>') + '</div>' +
-                            statusHint +
-                            '<div style="color:#7bb8d8;font-size:10px;margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">' +
-                                '<span>📅 ' + fmtDate(p.savedAt) + '</span>' +
-                                '<div style="display:flex;gap:4px;flex-wrap:wrap;">' +
-                                    '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-rot" style="padding:4px 8px;background:' + (isRotTarget(p.asin) ? 'rgba(46,196,127,0.35)' : 'rgba(120,120,120,0.25)') + ';border:1px solid ' + (isRotTarget(p.asin) ? 'rgba(46,196,127,0.7)' : 'rgba(120,120,120,0.5)') + ';color:' + (isRotTarget(p.asin) ? '#9effc4' : '#bbb') + ';border-radius:3px;font-size:10px;font-weight:bold;">' + (isRotTarget(p.asin) ? '🔄巡回ON' : '⏸巡回OFF') + '</button>' +
-                                    '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-up" ' + (isFirst ? 'disabled' : '') + ' style="padding:4px 8px;background:rgba(93,213,229,0.15);border:1px solid rgba(93,213,229,0.4);color:#5dd5e5;border-radius:3px;font-size:10px;' + (isFirst ? 'opacity:0.3;cursor:not-allowed;' : '') + '">⬆</button>' +
-                                    '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-down" ' + (isLast ? 'disabled' : '') + ' style="padding:4px 8px;background:rgba(93,213,229,0.15);border:1px solid rgba(93,213,229,0.4);color:#5dd5e5;border-radius:3px;font-size:10px;' + (isLast ? 'opacity:0.3;cursor:not-allowed;' : '') + '">⬇</button>' +
-                                    '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-goto" style="padding:4px 8px;background:rgba(2,136,209,0.3);border:1px solid rgba(128,224,255,0.5);color:#b8d8e8;border-radius:3px;font-size:10px;">🔗 商品ページ</button>' +
-                                    // ★v0.3.8.92: ホームアイコン用 URL は全商品で表示
-                                    //   (TRANS-AM 不可商品でもアイコンタップ→新規開始フォールバックで動くため)
-                                    '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-homeurl" style="padding:4px 8px;background:rgba(196,30,158,0.25);border:1px solid rgba(255,128,216,0.5);color:#ff80d8;border-radius:3px;font-size:10px;">🏠 アイコン用URL</button>' +
-                                    '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-del" style="padding:4px 8px;background:rgba(255,77,77,0.2);border:1px solid rgba(255,77,77,0.5);color:#ff8080;border-radius:3px;font-size:10px;">🗑</button>' +
-                                '</div>' +
+                        // ★PC版 横長1行レイアウト: ≡ドラッグハンドル | 商品名(広く・省略表示) + ASIN/状態/日付 | 右にアイコンボタン
+                        return '<div data-row-asin="' + escHtml(p.asin) + '" draggable="true" class="lb-am-prod-row" style="display:flex;align-items:center;gap:10px;padding:8px 10px;margin-bottom:5px;background:rgba(8,18,26,0.75);border-left:4px solid ' + accentColor + ';border-radius:4px;">' +
+                            '<div class="lb-am-prod-drag" title="ドラッグで並べ替え" style="flex:0 0 auto;color:#6a8a9a;font-size:18px;cursor:grab;user-select:none;padding:0 2px;">≡</div>' +
+                            '<div style="flex:1 1 auto;min-width:0;">' +
+                                '<div style="color:#eaf4fb;font-size:14px;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + (p.productName ? escHtml(p.productName) : '<span style="opacity:0.5;">(商品名未取得)</span>') + '</div>' +
+                                '<div style="margin-top:3px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><span style="color:' + asinColor + ';font-family:monospace;font-weight:bold;">' + escHtml(p.asin) + '</span>' + statusBadge + '<span style="color:#7bb8d8;margin-left:8px;">📅 ' + fmtDate(p.savedAt) + '</span></div>' +
+                            '</div>' +
+                            '<div style="flex:0 0 auto;display:flex;gap:5px;align-items:center;">' +
+                                '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-rot" style="padding:6px 10px;background:' + (isRotTarget(p.asin) ? 'rgba(46,196,127,0.35)' : 'rgba(120,120,120,0.25)') + ';border:1px solid ' + (isRotTarget(p.asin) ? 'rgba(46,196,127,0.7)' : 'rgba(120,120,120,0.5)') + ';color:' + (isRotTarget(p.asin) ? '#9effc4' : '#bbb') + ';border-radius:4px;font-size:12px;font-weight:bold;white-space:nowrap;">' + (isRotTarget(p.asin) ? '🔄ON' : '⏸OFF') + '</button>' +
+                                '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-goto" title="商品ページ" style="padding:6px 9px;background:rgba(2,136,209,0.3);border:1px solid rgba(128,224,255,0.5);color:#b8d8e8;border-radius:4px;font-size:14px;">🔗</button>' +
+                                '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-homeurl" title="アイコン用URL" style="padding:6px 9px;background:rgba(196,30,158,0.25);border:1px solid rgba(255,128,216,0.5);color:#ff80d8;border-radius:4px;font-size:14px;">🏠</button>' +
+                                '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-del" title="削除" style="padding:6px 9px;background:rgba(255,77,77,0.2);border:1px solid rgba(255,77,77,0.5);color:#ff8080;border-radius:4px;font-size:14px;">🗑</button>' +
                             '</div>' +
                         '</div>';
                     }).join('');
@@ -5277,7 +5273,7 @@
                         '<div style="font-size:10px;color:#7bb8d8;margin-top:4px;opacity:0.7;">※ addressID(送付先 ID)・UI 設定は保持</div>' +
                     '</div>' +
                     '<div style="margin-bottom:8px;color:#7bb8d8;font-size:11px;">📋 保存済み商品 (' + products.length + ' 件) / 🔄巡回ON <b id="lb-am-prod-rotcount" style="color:#9effc4;">' + products.filter(function (p) { return isRotTarget(p.asin); }).length + '</b> 件</div>' +
-                    '<div id="lb-am-prod-list" style="max-height:64vh;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:6px;align-content:start;">' + listHtml + '</div>' +
+                    '<div id="lb-am-prod-list" style="max-height:66vh;overflow-y:auto;">' + listHtml + '</div>' +
                     '<input id="lb-am-prod-file-input" type="file" accept=".csv,text/csv" style="display:none;">';
                 document.body.appendChild(ov);
                 const closeOv = () => {
@@ -5376,6 +5372,41 @@
                         } catch (e) {}
                     });
                 });
+                // ★PC版: ドラッグ&ドロップで並べ替え (≡ハンドルを掴んで上下へ)
+                (function () {
+                    let draggedAsin = null;
+                    Array.prototype.forEach.call(ov.querySelectorAll('.lb-am-prod-row'), function (row) {
+                        row.addEventListener('dragstart', function (e) {
+                            draggedAsin = row.getAttribute('data-row-asin');
+                            try { e.dataTransfer.effectAllowed = 'move'; } catch (ex) {}
+                            row.style.opacity = '0.4';
+                        });
+                        row.addEventListener('dragend', function () { row.style.opacity = ''; });
+                        row.addEventListener('dragover', function (e) {
+                            e.preventDefault();
+                            try { e.dataTransfer.dropEffect = 'move'; } catch (ex) {}
+                            row.style.boxShadow = 'inset 0 3px 0 #5dd5e5';
+                        });
+                        row.addEventListener('dragleave', function () { row.style.boxShadow = ''; });
+                        row.addEventListener('drop', function (e) {
+                            e.preventDefault();
+                            row.style.boxShadow = '';
+                            const targetAsin = row.getAttribute('data-row-asin');
+                            if (!draggedAsin || !targetAsin || draggedAsin === targetAsin) return;
+                            try {
+                                const order = getProductOrder();
+                                const from = order.indexOf(draggedAsin);
+                                const to = order.indexOf(targetAsin);
+                                if (from < 0 || to < 0) return;
+                                order.splice(from, 1);
+                                order.splice(to, 0, draggedAsin);
+                                setProductOrder(order);
+                                closeOv();
+                                setTimeout(function () { try { productsBtn.click(); } catch (ex) {} }, 100);
+                            } catch (ex) {}
+                        });
+                    });
+                })();
                 // 個別削除
                 Array.prototype.forEach.call(ov.querySelectorAll('.lb-am-prod-del'), (btn) => {
                     btn.addEventListener('click', () => {
@@ -6203,6 +6234,39 @@
         warn:  15893760, // orange/yellow
         info:  3447003,  // blue
     };
+    // ★PC版: ログが LOG_MAX_AM で溢れる前に、自動で CSV ダウンロードして保全する
+    //   (userscript は任意フォルダへ直書き不可。Chrome のダウンロード先を Desktop\amazon に固定して運用)
+    const AUTO_ARCHIVE_AT = 1800;       // この件数に達したら自動アーカイブ (LOG_MAX_AM=2000 の手前)
+    let _logArchiveBusy = false;
+    const archiveLogToCsv = () => {
+        if (_logArchiveBusy) return;
+        _logArchiveBusy = true;
+        try {
+            const esc = (v) => { if (v == null) return ''; const s = String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+            const seen = new Set(); const merged = [];
+            const all = LOG_BUFFER_AM.concat(LOG_BUFFER_AM_CRITICAL);
+            for (const e of all) {
+                const k = (e.ts || '') + '|' + (e.perfMs || '') + '|' + (e.category || '') + '|' + (e.message || '').slice(0, 40);
+                if (seen.has(k)) continue; seen.add(k); merged.push(e);
+            }
+            merged.sort((a, b) => (a.ts || '').localeCompare(b.ts || ''));
+            const header = ['timestamp', 'perfMs', 'level', 'tag', 'message', 'data'].join(',');
+            const rows = merged.map((e) => [esc(e.ts || ''), esc(e.perfMs !== undefined ? e.perfMs : ''), esc(e.level || ''), esc(e.category || ''), esc(e.message || ''), esc(e.detail ? JSON.stringify(e.detail) : '')].join(','));
+            const csvBody = '﻿' + header + '\n' + rows.join('\n');
+            const blob = new Blob([csvBody], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const pad = (n) => String(n).padStart(2, '0'); const now = new Date();
+            const fname = 'gundambot-amazon-log-' + now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + '-' + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds()) + '-auto.csv';
+            const a = document.createElement('a'); a.href = url; a.download = fname; a.style.display = 'none';
+            document.body.appendChild(a); a.click();
+            setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} try { a.remove(); } catch (e) {} }, 1000);
+            // アーカイブ済み → 直近200件だけ残す (溢れ防止 + 次アーカイブまでの猶予)
+            if (LOG_BUFFER_AM.length > 200) LOG_BUFFER_AM.splice(0, LOG_BUFFER_AM.length - 200);
+            try { saveLogAm(); } catch (e) {}
+            try { toast('📥 ログ自動保存: ' + fname, '#0288d1', 3500); } catch (e) {}
+        } catch (e) {}
+        setTimeout(() => { _logArchiveBusy = false; }, 1500);
+    };
     const logAm = (level, category, message, detail) => {
         const t = new Date();
         const ts = _formatTs(t);
@@ -6210,6 +6274,7 @@
         LOG_BUFFER_AM.push(entry);
         if (LOG_BUFFER_AM.length > LOG_MAX_AM) LOG_BUFFER_AM.shift();
         saveLogAm();
+        if (LOG_BUFFER_AM.length >= AUTO_ARCHIVE_AT) { try { archiveLogToCsv(); } catch (e) {} }
         // ★v0.3.8.76: 重要タグは別バッファにも永続保持 (shift() 影響を受けない)
         try {
             if (CRITICAL_TAGS.has(category) || level === 'error' || level === 'warn') {
