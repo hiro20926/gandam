@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.0.6
+// @version      1.0.7
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.0.6';
+    const SCRIPT_VERSION = 'PC-1.0.7';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -5277,7 +5277,7 @@
                         '<div style="font-size:10px;color:#7bb8d8;margin-top:4px;opacity:0.7;">※ addressID(送付先 ID)・UI 設定は保持</div>' +
                     '</div>' +
                     '<div style="margin-bottom:8px;color:#7bb8d8;font-size:11px;">📋 保存済み商品 (' + products.length + ' 件) / 🔄巡回ON <b id="lb-am-prod-rotcount" style="color:#9effc4;">' + products.filter(function (p) { return isRotTarget(p.asin); }).length + '</b> 件</div>' +
-                    '<div id="lb-am-prod-list" style="max-height:60vh;overflow-y:auto;">' + listHtml + '</div>' +
+                    '<div id="lb-am-prod-list" style="max-height:64vh;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:6px;align-content:start;">' + listHtml + '</div>' +
                     '<input id="lb-am-prod-file-input" type="file" accept=".csv,text/csv" style="display:none;">';
                 document.body.appendChild(ov);
                 const closeOv = () => {
@@ -14343,8 +14343,14 @@
         }
         S.setStep(STEP_PURCHASING);
 
-        // 人間っぽい読み時間
-        await sleep(readingDelayMs);
+        // 人間っぽい読み時間 (★停止ボタンを速く効かせるため 120ms 刻みで halt チェックして即中断)
+        {
+            const _haltDeadline = Date.now() + readingDelayMs;
+            while (Date.now() < _haltDeadline) {
+                if (S.shouldHalt()) return;
+                await sleep(Math.min(120, Math.max(1, _haltDeadline - Date.now())));
+            }
+        }
         if (S.shouldHalt()) return;
 
         // ★PC版 巡回ON: TRANS-AM在庫切れ時は「同じ商品の即リトライ」でなく「次の登録商品」へ移動。
