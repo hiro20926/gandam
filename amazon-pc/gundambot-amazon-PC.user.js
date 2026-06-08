@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.0.1
+// @version      1.0.2
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.0.1';
+    const SCRIPT_VERSION = 'PC-1.0.2';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -5214,6 +5214,7 @@
                             '<div style="color:#7bb8d8;font-size:10px;margin-top:6px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;">' +
                                 '<span>📅 ' + fmtDate(p.savedAt) + '</span>' +
                                 '<div style="display:flex;gap:4px;flex-wrap:wrap;">' +
+                                    '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-rot" style="padding:4px 8px;background:' + (isRotTarget(p.asin) ? 'rgba(46,196,127,0.35)' : 'rgba(120,120,120,0.25)') + ';border:1px solid ' + (isRotTarget(p.asin) ? 'rgba(46,196,127,0.7)' : 'rgba(120,120,120,0.5)') + ';color:' + (isRotTarget(p.asin) ? '#9effc4' : '#bbb') + ';border-radius:3px;font-size:10px;font-weight:bold;">' + (isRotTarget(p.asin) ? '🔄巡回ON' : '⏸巡回OFF') + '</button>' +
                                     '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-up" ' + (isFirst ? 'disabled' : '') + ' style="padding:4px 8px;background:rgba(93,213,229,0.15);border:1px solid rgba(93,213,229,0.4);color:#5dd5e5;border-radius:3px;font-size:10px;' + (isFirst ? 'opacity:0.3;cursor:not-allowed;' : '') + '">⬆</button>' +
                                     '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-down" ' + (isLast ? 'disabled' : '') + ' style="padding:4px 8px;background:rgba(93,213,229,0.15);border:1px solid rgba(93,213,229,0.4);color:#5dd5e5;border-radius:3px;font-size:10px;' + (isLast ? 'opacity:0.3;cursor:not-allowed;' : '') + '">⬇</button>' +
                                     '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-goto" style="padding:4px 8px;background:rgba(2,136,209,0.3);border:1px solid rgba(128,224,255,0.5);color:#b8d8e8;border-radius:3px;font-size:10px;">🔗 商品ページ</button>' +
@@ -5243,7 +5244,7 @@
                         '<button id="lb-am-prod-reset-all" style="width:100%;padding:10px;background:rgba(255,77,77,0.15);border:1px solid rgba(255,77,77,0.5);color:#ff8080;border-radius:5px;font-size:12px;font-weight:bold;">⚠️ 全削除 (商品データ初期化)</button>' +
                         '<div style="font-size:10px;color:#7bb8d8;margin-top:4px;opacity:0.7;">※ addressID(送付先 ID)・UI 設定は保持</div>' +
                     '</div>' +
-                    '<div style="margin-bottom:8px;color:#7bb8d8;font-size:11px;">📋 保存済み商品 (' + products.length + ' 件)</div>' +
+                    '<div style="margin-bottom:8px;color:#7bb8d8;font-size:11px;">📋 保存済み商品 (' + products.length + ' 件) / 🔄巡回ON <b id="lb-am-prod-rotcount" style="color:#9effc4;">' + products.filter(function (p) { return isRotTarget(p.asin); }).length + '</b> 件</div>' +
                     '<div id="lb-am-prod-list" style="max-height:60vh;overflow-y:auto;">' + listHtml + '</div>' +
                     '<input id="lb-am-prod-file-input" type="file" accept=".csv,text/csv" style="display:none;">';
                 document.body.appendChild(ov);
@@ -5309,6 +5310,25 @@
                     } catch (e) {
                         toast('CSV 解析失敗: ' + (e && e.message ? e.message : e), STOP_RED, 6000);
                     }
+                });
+                // ★PC版: 巡回ON/OFF トグル(商品ごと) — ON にした商品だけ巡回する
+                Array.prototype.forEach.call(ov.querySelectorAll('.lb-am-prod-rot'), (btn) => {
+                    btn.addEventListener('click', () => {
+                        const asin = btn.getAttribute('data-asin');
+                        if (!asin) return;
+                        const on = !isRotTarget(asin);
+                        setRotTarget(asin, on);
+                        btn.textContent = on ? '🔄巡回ON' : '⏸巡回OFF';
+                        btn.style.background = on ? 'rgba(46,196,127,0.35)' : 'rgba(120,120,120,0.25)';
+                        btn.style.borderColor = on ? 'rgba(46,196,127,0.7)' : 'rgba(120,120,120,0.5)';
+                        btn.style.color = on ? '#9effc4' : '#bbb';
+                        try {
+                            const onCount = (listSavedProducts() || []).filter(function (p) { return isRotTarget(p.asin); }).length;
+                            const hdr = document.getElementById('lb-am-prod-rotcount');
+                            if (hdr) hdr.textContent = String(onCount);
+                            toast(on ? '🔄 巡回ON: ' + asin : '⏸ 巡回OFF: ' + asin, on ? '#2e7d32' : '#666', 2000);
+                        } catch (e) {}
+                    });
                 });
                 // 個別削除
                 Array.prototype.forEach.call(ov.querySelectorAll('.lb-am-prod-del'), (btn) => {
@@ -7118,8 +7138,26 @@
     //   ON/OFF は localStorage('LB_AM_ROT_ON')。パネルの「🔄 巡回購入」ボタンで切替。
     const ROT_ON_KEY = 'LB_AM_ROT_ON';
     const ROT_IDX_KEY = 'LB_AM_ROT_IDX';
+    const ROT_TARGET_PREFIX = 'LB_AM_ROT_TARGET_';   // 商品ごとの巡回ON/OFF。キー無し=ON(既定)、'0'=OFF
     const isRotationOn = () => {
         try { return localStorage.getItem(ROT_ON_KEY) === '1'; } catch (e) { return false; }
+    };
+    // ★PC版: 商品ごとの巡回ON/OFF。既存商品は既定でON、明示的にOFFした商品だけ '0' を保存。
+    const isRotTarget = (asin) => {
+        try { return localStorage.getItem(ROT_TARGET_PREFIX + asin) !== '0'; } catch (e) { return true; }
+    };
+    const setRotTarget = (asin, on) => {
+        try {
+            if (on) localStorage.removeItem(ROT_TARGET_PREFIX + asin);   // ON=既定なのでキー削除
+            else localStorage.setItem(ROT_TARGET_PREFIX + asin, '0');
+        } catch (e) {}
+    };
+    // 巡回対象(ON)の商品だけを並び順で返す
+    const getRotationList = () => {
+        try {
+            const all = listSavedProducts() || [];
+            return all.filter(function (p) { return p && p.asin && isRotTarget(p.asin); });
+        } catch (e) { return listSavedProducts() || []; }
     };
     const rotateNextUrl = () => {
         // 巡回ONかつ登録2件以上なら「次の登録商品」へ移動。★TRANS-AM優先(HIRO仕様):
@@ -7128,7 +7166,7 @@
         // ※購入フロー本体・別商品ガードは無変更。ここでモード切替とセッションproductUrl更新だけ行う。
         try {
             if (!isRotationOn()) return null;
-            const list = listSavedProducts();
+            const list = getRotationList();   // ★巡回ON にした商品だけを巡る
             if (!list || list.length < 2) return null;
             const curAsin = (typeof extractAsin === 'function') ? (extractAsin(location.pathname) || '') : '';
             let idx = -1;
