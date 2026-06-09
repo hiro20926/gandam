@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.0.9
+// @version      1.1.2
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.0.9';
+    const SCRIPT_VERSION = 'PC-1.1.2';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -7349,6 +7349,50 @@
             } catch (e) {}
             return targetUrl;
         } catch (e) { return null; }
+    };
+
+    // ★PC版: 「ショッピングを続ける」(checkout中断/セッションリセット=bot検知の初期兆候)対策の部品
+    //   検出したら人間らしくボタンを押してセッション回復し、巡回を約1分(ランダム)止めて疑いを冷ます。
+    const COOLDOWN_KEY = 'LB_AM_COOLDOWN_UNTIL';
+    const findContinueShoppingBtn = () => {
+        try {
+            const els = document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"], .a-button-text, .a-button-input');
+            for (let i = 0; i < els.length; i++) {
+                const el = els[i];
+                const t = ((el.innerText || el.textContent || el.value || '') + '').trim();
+                if (/^ショッピングを続ける$|ショッピングを続ける/.test(t) && t.length < 40) return el;
+            }
+        } catch (e) {}
+        return null;
+    };
+    const humanClick = async (el) => {
+        try {
+            try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
+            await sleep(500 + Math.floor(Math.random() * 1000));   // 画面を見て押すまでの人間らしい間
+            const r = el.getBoundingClientRect();
+            const cx = Math.round(r.left + r.width / 2), cy = Math.round(r.top + r.height / 2);
+            const mk = (type) => new MouseEvent(type, { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 });
+            el.dispatchEvent(mk('mousemove'));
+            await sleep(40 + Math.floor(Math.random() * 90));
+            el.dispatchEvent(mk('mousedown'));
+            await sleep(40 + Math.floor(Math.random() * 80));
+            el.dispatchEvent(mk('mouseup'));
+            el.dispatchEvent(mk('click'));
+            try { el.click(); } catch (e) {}   // フォールバック(合成イベントが無視された場合)
+            return true;
+        } catch (e) { try { el.click(); return true; } catch (e2) { return false; } }
+    };
+    const isInCooldown = () => {
+        try { return Date.now() < (parseInt(localStorage.getItem(COOLDOWN_KEY) || '0', 10) || 0); } catch (e) { return false; }
+    };
+    const cooldownRemainMs = () => {
+        try { return Math.max(0, (parseInt(localStorage.getItem(COOLDOWN_KEY) || '0', 10) || 0) - Date.now()); } catch (e) { return 0; }
+    };
+    const startCooldown = () => {
+        const ms = 45000 + Math.floor(Math.random() * 30000);   // 45〜75秒(約1分・ランダム)
+        try { localStorage.setItem(COOLDOWN_KEY, String(Date.now() + ms)); } catch (e) {}
+        try { logAm('warn', 'cooldown', '⏸ セッション疑い(ショッピングを続ける) → ' + Math.round(ms / 1000) + '秒クールダウン', {}); } catch (e) {}
+        return ms;
     };
 
     const scheduleReloadForWait = (reason) => {
@@ -14640,7 +14684,39 @@
             return;
         }
 
-        // ★v0.3.8.62: stale TRANS-AM フラグ クリーンアップ (panel 生成の前に実行)
+        // ★PC-1.1.2: 「ショッピングを続ける」(セッション疑い=bot検知の初期兆候)対策。HIRO案。
+        //   PC-1.1.0の「即停止」は誤り(在庫切れの正常画面で止まる)だったので撤回し、
+        //   検出 → 人間らしく押してセッション回復 → 約1分(ランダム)クールダウン → 自動再開、に変更。
+        //   ※ボタンが実在する時だけ動くので、通常の在庫切れ(STOCK_OUT_BUYNOW)処理は従来どおり。
+        try {
+            const _mode = S.getMode && S.getMode();
+            if (_mode && _mode !== MODE_STOPPED) {
+                const _contBtn = findContinueShoppingBtn();
+                if (_contBtn) {
+                    startCooldown();
+                    try { toast('⏸ 「ショッピングを続ける」検出 → 押して約1分 休止します', '#7b1fa2', 6000); } catch (e) {}
+                    humanClick(_contBtn);   // 人間らしく押す(セッション回復) → 遷移
+                    return;
+                }
+                // クールダウン中: ループを止めて、残り時間が経ったら自動で再開
+                if (isInCooldown()) {
+                    const _rem = cooldownRemainMs();
+                    try { logAm('info', 'cooldown', '⏸ クールダウン中 → ' + Math.round(_rem / 1000) + '秒待って再開', {}); } catch (e) {}
+                    setTimeout(() => {
+                        try {
+                            if (S.shouldHalt && S.shouldHalt()) return;
+                            let _url = null;
+                            try { _url = rotateNextUrl(); } catch (e) {}   // 巡回ONなら次商品へ
+                            if (!_url) { try { const _s = S.getSession && S.getSession(); _url = _s && _s.productUrl; } catch (e) {} }
+                            if (_url) location.href = _url; else location.reload();
+                        } catch (e) {}
+                    }, _rem + 500);
+                    return;
+                }
+            }
+        } catch (e) {}
+
+        // ※v0.3.8.62: stale TRANS-AM フラグ クリーンアップ (panel 生成の前に実行)
         //   HIRO 指摘 (2026-05-18 22:52): 「フラグがうまく動いてなくてピンクを表示してる可能性」
         // ★v0.3.8.63: 同時に LB_AM_VERIFIED_DIRECT もセッション越境チェック
         //   Claude 自発検査 (2026-05-18): 同じ脆弱性パターンを他キーで発見:
