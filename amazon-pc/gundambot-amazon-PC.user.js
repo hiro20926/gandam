@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.1.2
+// @version      1.1.3
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.1.2';
+    const SCRIPT_VERSION = 'PC-1.1.3';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -14392,10 +14392,11 @@
         })();
         const transAmUrl = asin ? getSavedTransAmUrl(asin) : null;
 
-        // ★ 人間っぽい "在庫切れ画面を読む時間" (900-1300ms ランダム) ★
-        //   v0.3.8.83: 300-700ms → 900-1300ms に拡大
-        //   navigate 所要 ~750ms と合算で平均 1.85 秒/サイクル (人間最速 ~2秒 寄り)
-        const readingDelayMs = 900 + Math.floor(Math.random() * 400);
+        // ★ 人間っぽい "在庫切れ画面を読む時間" ★
+        //   ★PC-1.1.3: CAPTCHA(本物のbot検知)が出たため 1.5〜5.5秒に拡大(HIRO指示「リトライ間隔7秒以内」)。
+        //     navigate ~0.75-1.5秒と合算で、商品〜商品の間隔が約2.5〜7秒(7秒以内・ランダム)になる。
+        //     アクセス頻度を従来(約2秒)の約1/3に落として bot検知/CAPTCHA を予防する。
+        const readingDelayMs = 1500 + Math.floor(Math.random() * 4000);
 
         // ★ 10% の確率で偽装サイクル (商品ページ経由) ★
         const useDecoyCycle = Math.random() < 0.10;
@@ -14684,35 +14685,18 @@
             return;
         }
 
-        // ★PC-1.1.2: 「ショッピングを続ける」(セッション疑い=bot検知の初期兆候)対策。HIRO案。
-        //   PC-1.1.0の「即停止」は誤り(在庫切れの正常画面で止まる)だったので撤回し、
-        //   検出 → 人間らしく押してセッション回復 → 約1分(ランダム)クールダウン → 自動再開、に変更。
-        //   ※ボタンが実在する時だけ動くので、通常の在庫切れ(STOCK_OUT_BUYNOW)処理は従来どおり。
+        // ★PC-1.1.3: bot検知対策。「ショッピングを続ける」(在庫切れの正常画面)は止めず、
+        //   本物の CAPTCHA(画像認証)だけ停止する。在庫切れの頻度は③(リトライ間隔7秒以内)でダウン済み。
+        //   CAPTCHA は URL(/errors_page/validateCaptcha 等)で判定できDOM不要なので、main即実行でも確実に検出。
+        //   CAPTCHA は自動で解けないため、停止してHIROさんに手動対応を促す(ログも自動保全)。
         try {
             const _mode = S.getMode && S.getMode();
-            if (_mode && _mode !== MODE_STOPPED) {
-                const _contBtn = findContinueShoppingBtn();
-                if (_contBtn) {
-                    startCooldown();
-                    try { toast('⏸ 「ショッピングを続ける」検出 → 押して約1分 休止します', '#7b1fa2', 6000); } catch (e) {}
-                    humanClick(_contBtn);   // 人間らしく押す(セッション回復) → 遷移
-                    return;
-                }
-                // クールダウン中: ループを止めて、残り時間が経ったら自動で再開
-                if (isInCooldown()) {
-                    const _rem = cooldownRemainMs();
-                    try { logAm('info', 'cooldown', '⏸ クールダウン中 → ' + Math.round(_rem / 1000) + '秒待って再開', {}); } catch (e) {}
-                    setTimeout(() => {
-                        try {
-                            if (S.shouldHalt && S.shouldHalt()) return;
-                            let _url = null;
-                            try { _url = rotateNextUrl(); } catch (e) {}   // 巡回ONなら次商品へ
-                            if (!_url) { try { const _s = S.getSession && S.getSession(); _url = _s && _s.productUrl; } catch (e) {} }
-                            if (_url) location.href = _url; else location.reload();
-                        } catch (e) {}
-                    }, _rem + 500);
-                    return;
-                }
+            if (_mode && _mode !== MODE_STOPPED && /validateCaptcha/.test(location.href)) {
+                try { logAm('error', 'captcha', '⛔ CAPTCHA(画像認証)検出 → 停止(自動では解けない・手動で解いて再開)', { url: location.href.slice(0, 120) }); } catch (e) {}
+                try { archiveLogToCsv(); } catch (e) {}   // 検知時点のログを確実に保全
+                try { S.opFullStop(); } catch (e) {}
+                try { toast('⛔ CAPTCHA(画像認証)が出ました\n→ 停止しました。手動で解いてから再開してください', STOP_RED, 60000); } catch (e) {}
+                return;
             }
         } catch (e) {}
 
