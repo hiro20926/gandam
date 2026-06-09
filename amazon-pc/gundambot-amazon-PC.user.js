@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.1.3
+// @version      1.1.4
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.1.3';
+    const SCRIPT_VERSION = 'PC-1.1.4';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -13777,12 +13777,9 @@
                 pageOrigin: location.origin,
             });
         } catch (e) {}
-        toast(
-            `🔍 「注文を確定」検出失敗\n` +
-            `iframe ${iframes.length}件(同一オリジン ${ifrAcc}件)\n` +
-            samples.slice(0, 8).join('\n'),
-            '#7b1fa2', 60000
-        );
+        // ★PC-1.1.4: 60秒の紛らわしいトーストを撤去。確定モーダル未検出は在庫切れ等で正常に起きるため、
+        //   「確定画面で止まった」と誤解されないよう短く中立な表示に変更(診断は上の logAm に残る)。
+        toast('ℹ️ 確定モーダル未検出(在庫切れ等で正常・巡回は継続中)', '#546e7a', 5000);
     };
 
     let expressCheckoutObserver = null;
