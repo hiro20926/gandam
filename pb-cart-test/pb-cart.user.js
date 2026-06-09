@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.15 2026-06-09 23:42 #7d46c6 JST
+// @version      v2.3.16 2026-06-10 00:09 #5c2608 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -221,6 +221,15 @@
   //       ⚙設定の「🧪 2発目以降は本物ボタン」 チェックで即 OFF=従来連打に復帰。
   //     ★★ これは silver-cat 実験専用。 GitHub 本番(#7f2443)は凍結。 本番へ push する前に必ず
   //        実販売ログで弾かれ減少を確認し、 既定値の是非を HIROさんと再判断すること。 ★★
+  //
+  // [U] Phase 17 (2026-06-10 HIROさん要望): iOS 表示中タブのみ稼働 (設計核心[D]の複数タブ並行を反転)
+  //     背景: iOS Safari で複数 p-bandai タブを開くと裏タブも動く → 表示中の1枚だけにしたい。
+  //       - mainLoopBody 冒頭: foreground_only=true(既定) かつ document.hidden なら 投入もリロードもせず待機、
+  //         一度きりの visibilitychange リスナーで表示復帰時に mainLoop 再開(二重起動ガードで安全)。
+  //       - watchdog: 表示中タブのみモードでは hidden タブを 30秒 reload しない(heartbeat は生かす)。
+  //     ★オプション foreground_only (既定 true)。 ⚙設定「📱 表示中のタブだけ動かす」 で OFF=全タブ並行(旧[D])。
+  //     ※ 過去 事故 5(localStorage paused 全タブ伝播) とは別物。 paused は従来どおり sessionStorage のまま。
+  //       本機能は「各タブが自分の表示状態で自律的に止まる/動く」 だけで、 タブ間に状態を伝播しない。
   //
   // 過去の事故ログは HISTORY.md、 設計詳細は CLAUDE.md を参照。
   // 動いている仕組みを壊さないための鉄則:
@@ -670,6 +679,7 @@
     'post-diag', 'reload-diag',    // ★Phase 13 診断 (1発目究明 / リロード時間計測)
     'phase14',                     // ★Phase 14 order 充填待ち (有効1発目の核心計測)
     'phase16',                     // ★Phase 16 本物ボタン+小窓待ち (実験の核心計測)
+    'foreground',                  // ★Phase 17 表示中タブのみ稼働 (裏タブ停止/再開)
   ]);
   // ★タブ ID (sessionStorage、 タブ独立 + reload 跨ぎで安定。 事故 5 paused と同じ流儀)
   const TAB_ID = (() => {
@@ -1032,6 +1042,11 @@
         // 小窓が出るまで待つ上限(=死んだページ救出のみ)。 遅いだけの応答はこの範囲で待ち切る。
         //   90秒 完全沈黙 = "遅い"ではなく"壊れている" と判断してリロード (HIROさん指定)。
         realbutton_popup_wait_ms: 90000,
+        // ★Phase 17 (2026-06-10): iOS 表示中タブのみ稼働。 裏(hidden)のタブはカート投入・リロードを止める。
+        //   背景: HIROさん iOS Safari で複数 p-bandai タブを開くと裏タブも動いてしまう → 表示中の1枚だけにしたい。
+        //   true=表示中タブのみ(既定) / false=従来どおり全タブ並行(設計核心[D]の旧動作)。
+        //   ※ 旧来の「複数タブ並行監視」 を反転する設定。 HIROさん 明示要望(2026-06-10)。
+        foreground_only: true,
       },
       keepalive: {
         enabled: false,
@@ -2047,6 +2062,12 @@
           recordMainLoopHeartbeat();
           return;
         }
+        // ★Phase 17 (2026-06-10): 表示中タブのみ稼働モードでは、 裏(hidden)タブを watchdog でリロードしない。
+        //   旧来 watchdog は 30秒ごとに reload するため、 これを抑えないと裏タブが動き続けてしまう。
+        if ((loadConfig().options || {}).foreground_only !== false && document.hidden) {
+          recordMainLoopHeartbeat();  // 表示復帰時の誤発火を防ぐため heartbeat は生かす
+          return;
+        }
         // ★商品ページじゃない時(ホーム/カテゴリ等)も watchdog 監視外
         if (typeof isProductPage === 'function' && !isProductPage()) {
           recordMainLoopHeartbeat();
@@ -2147,6 +2168,28 @@
     const cfg = loadConfig();
     const state = loadState();
     if (state.paused === true) { updateUI(); return; }
+
+    // ★Phase 17 (2026-06-10): iOS 表示中タブのみ稼働。 裏(hidden)タブはカート投入もリロードもしない。
+    //   foreground_only=true(既定) かつ タブが非表示なら、 何もせず待機 → 表示に戻ったら自動再開。
+    //   既存 vis-recovery は heartbeat 失効(>5秒)時のみ reload するため、 短時間の切替も拾えるよう
+    //   一度きりの visibilitychange リスナーで mainLoop を再開する(mainLoop の二重起動ガードで安全)。
+    if ((cfg.options || {}).foreground_only !== false && document.hidden) {
+      updateUI({ status: '🙈 裏のタブは停止中(このタブを表示すると再開)' });
+      pbLog('🙈','foreground','タブ非表示 → 待機(表示で自動再開)');
+      if (!window._pbFgResumeWaiting) {
+        window._pbFgResumeWaiting = true;
+        const _pbFgResume = () => {
+          if (!document.hidden) {
+            window._pbFgResumeWaiting = false;
+            document.removeEventListener('visibilitychange', _pbFgResume);
+            pbLog('👁','foreground','タブ表示 → 再開');
+            mainLoop();
+          }
+        };
+        document.addEventListener('visibilitychange', _pbFgResume);
+      }
+      return;
+    }
 
     const target = findTargetProduct(cfg, state);
     if (!target) {
@@ -3781,7 +3824,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.15 2026-06-09 23:42 #7d46c6 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.16 2026-06-10 00:09 #5c2608 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -4268,6 +4311,13 @@
               <strong>OFF にすると従来の連打方式に戻ります</strong>(うまく動かない時の保険)。
             </div>
           </div>
+          <div style="margin-top:10px;">
+            <label><input type="checkbox" id="pb-foreground-only"> 📱 <strong>表示中のタブだけ動かす(iOS向け)</strong></label>
+            <div style="font-size:11px;color:#b8a988;margin:4px 0 0 24px;line-height:1.5;">
+              今表示しているタブだけ監視・投入。 裏に回したタブは自動で停止し、 再び表示すると再開。<br>
+              <strong>OFF にすると開いている全タブが並行で動きます</strong>(従来動作)。
+            </div>
+          </div>
         </section>
 
         <section>
@@ -4355,6 +4405,7 @@
     modal.querySelector('#pb-low-power').checked = !!cfg.options.low_power_mode;
     modal.querySelector('#pb-lightweight-polling').checked = !(cfg.options.lightweight_polling === false);
     { const _rb = modal.querySelector('#pb-realbutton-retry'); if (_rb) _rb.checked = !(cfg.options.realbutton_retry === false); }
+    { const _fg = modal.querySelector('#pb-foreground-only'); if (_fg) _fg.checked = !(cfg.options.foreground_only === false); }
     // ★明示的に true の時だけ ON、 デフォルト・未設定は OFF(再販品も監視するため)
     modal.querySelector('#pb-new-release-only').checked = cfg.options.new_release_only_mode === true;
     modal.querySelector('#pb-new-release-grace').value = cfg.options.new_release_grace_minutes != null ? cfg.options.new_release_grace_minutes : 30;
@@ -5107,6 +5158,10 @@
         ? modal.querySelector('#pb-realbutton-retry').checked
         : (_prevOpts.realbutton_retry !== false)),
       realbutton_popup_wait_ms: _prevOpts.realbutton_popup_wait_ms || 90000,
+      // ★Phase 17: 表示中タブのみ稼働。 チェックボックスで切替、 無ければ既存値維持
+      foreground_only: (modal.querySelector('#pb-foreground-only')
+        ? modal.querySelector('#pb-foreground-only').checked
+        : (_prevOpts.foreground_only !== false)),
     };
     c.keepalive = {
       enabled: modal.querySelector('#pb-ka-enabled').checked,
@@ -5460,7 +5515,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.15 2026-06-09 23:42 #7d46c6 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.16 2026-06-10 00:09 #5c2608 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -5678,7 +5733,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.15 2026-06-09 23:42 #7d46c6 JST');
+    lines.push('🔧 build: v2.3.16 2026-06-10 00:09 #5c2608 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
