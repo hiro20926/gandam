@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.16 2026-06-10 00:09 #5c2608 JST
+// @version      v2.3.17 2026-06-10 23:04 #ab4682 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -680,6 +680,7 @@
     'phase14',                     // ★Phase 14 order 充填待ち (有効1発目の核心計測)
     'phase16',                     // ★Phase 16 本物ボタン+小窓待ち (実験の核心計測)
     'foreground',                  // ★Phase 17 表示中タブのみ稼働 (裏タブ停止/再開)
+    'ui-heal',                     // ★Phase 18 FAB自己修復 (DOM差し替えで消えたFABの再注入)
   ]);
   // ★タブ ID (sessionStorage、 タブ独立 + reload 跨ぎで安定。 事故 5 paused と同じ流儀)
   const TAB_ID = (() => {
@@ -3824,7 +3825,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.16 2026-06-10 00:09 #5c2608 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.17 2026-06-10 23:04 #ab4682 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -3955,6 +3956,33 @@
     pbLog('✅','ui','floating UI injected');
     return true;
   }
+
+  // ★Phase 18 (2026-06-10): FAB 自己修復 — ページが読込後に DOM を丸ごと差し替え、 注入した UI を消す事象に対応。
+  //   実測(2026-06-10 ブラウザ調査): document-end 時点 body=3要素(=薄い"白いページ") → 描画後 84要素に。
+  //   その際 documentElement ごと差し替えられ、 注入した FAB が消滅(ただし window 変数は生存)。
+  //   旧来は _uiInjected ガードで再注入もされず「モニターが商品ページで消える」 状態になっていた。
+  //   対策: FAB(#pb-fab)が DOM から消えていたら _uiInjected を戻して再注入し、 監視も再開する。
+  //   window は当該ページ生存中ずっと残るので setInterval が効く(全面リロード時は新規 boot で作り直される)。
+  //   ※ #pb-fab が健在なら getElementById チェックだけで即 return(コスト極小・チラつきなし)。
+  function ensureFloatingUI() {
+    try {
+      if (!document.body) return;
+      if (document.getElementById('pb-fab')) return;   // FAB 健在 → 何もしない
+      // FAB が消えた = ページが DOM を差し替えた → 再注入
+      _uiInjected = false;
+      injectFloatingUI();
+      try { renderErrorPanel(); } catch (_) {}
+      try { updateUI(); } catch (_) {}
+      pbLog('🔁','ui-heal','FAB消失検知 → 再注入(ページがDOMを差し替えた)');
+      // 差し替え後に描画された本体(#buy 等)を監視するため mainLoop を再起動(paused は尊重)
+      try { if (loadState().paused !== true) setTimeout(mainLoop, 0); } catch (_) {}
+    } catch (e) {}
+  }
+  function startFabSelfHeal() {
+    if (window._pbFabHealTimer) return;
+    try { window._pbFabHealTimer = setInterval(ensureFloatingUI, 700); } catch (_) {}
+  }
+
   function updateUI(extra) {
     const fab = $('#pb-fab');
     if (!fab) return;
@@ -5515,7 +5543,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.16 2026-06-10 00:09 #5c2608 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.17 2026-06-10 23:04 #ab4682 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -5630,6 +5658,8 @@
     // FAB注入(右下UI)
     injectFloatingUI();
     updateUI();
+    // ★Phase 18 (2026-06-10): FAB 自己修復を起動(p-bandai が読込後に DOM 差し替え→FAB消滅 する対策)
+    startFabSelfHeal();
 
     // タイマー & mainLoop はバナーと並行起動(バナー表示で投入処理が遅延しないこと)
     startKeepaliveTimer();
@@ -5733,7 +5763,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.16 2026-06-10 00:09 #5c2608 JST');
+    lines.push('🔧 build: v2.3.17 2026-06-10 23:04 #ab4682 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
