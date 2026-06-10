@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.17 2026-06-10 23:04 #ab4682 JST
+// @version      v2.3.18 2026-06-10 23:13 #c3ac69 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -230,6 +230,16 @@
   //     ★オプション foreground_only (既定 true)。 ⚙設定「📱 表示中のタブだけ動かす」 で OFF=全タブ並行(旧[D])。
   //     ※ 過去 事故 5(localStorage paused 全タブ伝播) とは別物。 paused は従来どおり sessionStorage のまま。
   //       本機能は「各タブが自分の表示状態で自律的に止まる/動く」 だけで、 タブ間に状態を伝播しない。
+  //     ★2026-06-10: 既定を false に変更(本番安全側)。 Phase16/17 は実験のため ⚙設定の opt-in に統一。
+  //
+  // [V] Phase 18 (2026-06-10 緊急修正): FAB 自己修復 — p-bandai の「読込後DOM丸ごと差し替え」 対策。 ★全バージョン必須★
+  //     実測(ブラウザ調査 2026-06-10): p-bandai が薄い初期ページ(body 3要素)を出し、 直後に DOM を丸ごと
+  //     差し替える(body 77-84要素 / documentElement ごと差替、 window 変数は生存)ように変わった。 ツールは
+  //     document-end でFABを注入するが直後に消し去られ「モニターが商品ページで消える」状態になった(#7f2443含む全版)。
+  //     対策: ensureFloatingUI を 700ms 間隔で回し、 #pb-fab が DOM から消えていたら _uiInjected を戻して
+  //     再注入 + mainLoop 再起動。 実ページで wipe を再現し自己修復が復活させることを実証済み。
+  //     ★これはオプション無しの常時ON(純粋な修復、 副作用なし)。 #pb-fab 健在時は getElementById チェックのみで即return。
+  //     ★injectFloatingUI のイベントは全て FAB ローカル(.onclick on 新要素)なので再実行で document リスナー重複なし。
   //
   // 過去の事故ログは HISTORY.md、 設計詳細は CLAUDE.md を参照。
   // 動いている仕組みを壊さないための鉄則:
@@ -1038,16 +1048,17 @@
         //   6/9 ログで判明: 同一ページ上の iframe 連打は 2発目以降ほぼ全部 /error/4/(bot拒否)。
         //   HIROさんの手動フロー(押す→小窓を確認→次を押す)を再現するため、 2発目以降は実ボタンを click し
         //   サイト本来の小窓(モーダル)が出るのを待って判定する。 1発目は従来 iframe のまま(無変更)。
-        //   ★現状テスト用に既定 true (silver-cat 実験用)。 false で従来の iframe 連打に即戻る。
-        realbutton_retry: true,
+        //   ★既定 false (本番安全側 — 未検証の購入核心変更のため)。 ⚙設定「🧪」で ON にして実験。
+        realbutton_retry: false,
         // 小窓が出るまで待つ上限(=死んだページ救出のみ)。 遅いだけの応答はこの範囲で待ち切る。
         //   90秒 完全沈黙 = "遅い"ではなく"壊れている" と判断してリロード (HIROさん指定)。
         realbutton_popup_wait_ms: 90000,
         // ★Phase 17 (2026-06-10): iOS 表示中タブのみ稼働。 裏(hidden)のタブはカート投入・リロードを止める。
         //   背景: HIROさん iOS Safari で複数 p-bandai タブを開くと裏タブも動いてしまう → 表示中の1枚だけにしたい。
-        //   true=表示中タブのみ(既定) / false=従来どおり全タブ並行(設計核心[D]の旧動作)。
+        //   true=表示中タブのみ / false=従来どおり全タブ並行(設計核心[D]の旧動作)。
+        //   ★既定 false (本番安全側 — iOS 実機未検証のため)。 HIROさん要望機能だが ⚙設定「📱」で ON にして検証。
         //   ※ 旧来の「複数タブ並行監視」 を反転する設定。 HIROさん 明示要望(2026-06-10)。
-        foreground_only: true,
+        foreground_only: false,
       },
       keepalive: {
         enabled: false,
@@ -3825,7 +3836,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.17 2026-06-10 23:04 #ab4682 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.18 2026-06-10 23:13 #c3ac69 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -5543,7 +5554,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.17 2026-06-10 23:04 #ab4682 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.18 2026-06-10 23:13 #c3ac69 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -5763,7 +5774,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.17 2026-06-10 23:04 #ab4682 JST');
+    lines.push('🔧 build: v2.3.18 2026-06-10 23:13 #c3ac69 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }

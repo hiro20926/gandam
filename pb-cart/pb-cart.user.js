@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.14 2026-06-07 01:12 #7f2443 JST
+// @version      v2.3.18 2026-06-10 23:13 #c3ac69 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -207,6 +207,39 @@
   //         install ボタンは素の ./pb-cart.user.js (相対) を指す。
   //       - 開発用 pb-cart.user.js は HIROさん の webhook を既定値に保持 (HIROさん 自身用)。
   //         build_zip_v2.sh が pb_mobile_github/ を生成する際にテンプレ経由で空に置換する。
+  //
+  // [T] Phase 16 (2026-06-09 実験中 / silver-cat 限定): 2発目以降を「本物ボタン+小窓待ち」に
+  //     背景: 6/9 ログで 同一ページ iframe 連打は 2発目以降ほぼ全部 /error/4/(bot拒否)、 1発目だけクリーン。
+  //     HIROさんの手動フロー(押す→小窓確認→次を押す)を再現する実験。
+  //       - 1発目: 従来 iframe (無変更、 凍結核心[A]を守る)
+  //       - 2発目以降: realButtonAttemptOnce = 本物ボタン #buy を click() → 小窓(detectCartAddedPopup /
+  //         既存エラー文言)を待つ → 入った=order照合でSUCCESS / 在庫なし等=dismiss して次 /
+  //         90秒完全沈黙=DEAD_PAGE(ページ死亡)としてリロード救出。 早い見切りリロードはしない(HIROさん指示)。
+  //       - real-button モード時はループ全体の 30秒 hard-timeout を無効化(小窓を待ち切るため。 各押下が
+  //         iframe~10s / real-button~90s で自己完結するのでループは発散しない)。
+  //     ★オプション realbutton_retry (既定 true=実験用) / realbutton_popup_wait_ms (90000)。
+  //       ⚙設定の「🧪 2発目以降は本物ボタン」 チェックで即 OFF=従来連打に復帰。
+  //     ★★ これは silver-cat 実験専用。 GitHub 本番(#7f2443)は凍結。 本番へ push する前に必ず
+  //        実販売ログで弾かれ減少を確認し、 既定値の是非を HIROさんと再判断すること。 ★★
+  //
+  // [U] Phase 17 (2026-06-10 HIROさん要望): iOS 表示中タブのみ稼働 (設計核心[D]の複数タブ並行を反転)
+  //     背景: iOS Safari で複数 p-bandai タブを開くと裏タブも動く → 表示中の1枚だけにしたい。
+  //       - mainLoopBody 冒頭: foreground_only=true(既定) かつ document.hidden なら 投入もリロードもせず待機、
+  //         一度きりの visibilitychange リスナーで表示復帰時に mainLoop 再開(二重起動ガードで安全)。
+  //       - watchdog: 表示中タブのみモードでは hidden タブを 30秒 reload しない(heartbeat は生かす)。
+  //     ★オプション foreground_only (既定 true)。 ⚙設定「📱 表示中のタブだけ動かす」 で OFF=全タブ並行(旧[D])。
+  //     ※ 過去 事故 5(localStorage paused 全タブ伝播) とは別物。 paused は従来どおり sessionStorage のまま。
+  //       本機能は「各タブが自分の表示状態で自律的に止まる/動く」 だけで、 タブ間に状態を伝播しない。
+  //     ★2026-06-10: 既定を false に変更(本番安全側)。 Phase16/17 は実験のため ⚙設定の opt-in に統一。
+  //
+  // [V] Phase 18 (2026-06-10 緊急修正): FAB 自己修復 — p-bandai の「読込後DOM丸ごと差し替え」 対策。 ★全バージョン必須★
+  //     実測(ブラウザ調査 2026-06-10): p-bandai が薄い初期ページ(body 3要素)を出し、 直後に DOM を丸ごと
+  //     差し替える(body 77-84要素 / documentElement ごと差替、 window 変数は生存)ように変わった。 ツールは
+  //     document-end でFABを注入するが直後に消し去られ「モニターが商品ページで消える」状態になった(#7f2443含む全版)。
+  //     対策: ensureFloatingUI を 700ms 間隔で回し、 #pb-fab が DOM から消えていたら _uiInjected を戻して
+  //     再注入 + mainLoop 再起動。 実ページで wipe を再現し自己修復が復活させることを実証済み。
+  //     ★これはオプション無しの常時ON(純粋な修復、 副作用なし)。 #pb-fab 健在時は getElementById チェックのみで即return。
+  //     ★injectFloatingUI のイベントは全て FAB ローカル(.onclick on 新要素)なので再実行で document リスナー重複なし。
   //
   // 過去の事故ログは HISTORY.md、 設計詳細は CLAUDE.md を参照。
   // 動いている仕組みを壊さないための鉄則:
@@ -655,6 +688,9 @@
     'phase10', 'phase11',          // ★Phase 10/11 新コードの例外・計測 (即テストの不具合追跡用)
     'post-diag', 'reload-diag',    // ★Phase 13 診断 (1発目究明 / リロード時間計測)
     'phase14',                     // ★Phase 14 order 充填待ち (有効1発目の核心計測)
+    'phase16',                     // ★Phase 16 本物ボタン+小窓待ち (実験の核心計測)
+    'foreground',                  // ★Phase 17 表示中タブのみ稼働 (裏タブ停止/再開)
+    'ui-heal',                     // ★Phase 18 FAB自己修復 (DOM差し替えで消えたFABの再注入)
   ]);
   // ★タブ ID (sessionStorage、 タブ独立 + reload 跨ぎで安定。 事故 5 paused と同じ流儀)
   const TAB_ID = (() => {
@@ -1008,6 +1044,21 @@
         //   2500ms だと遅い端で空タイムアウト→リロードを繰り返す恐れがあるため余裕を持たせる。
         //   実際の充填時間は phase14 ログ(待ちNms)に残るので、 運用データで再調整可能。
         wait_order_fill_max_ms: 4000,      // order 充填待ちの上限。 超えたら POST せずリロード
+        // ★Phase 16 (2026-06-09 実験): 2発目以降を「本物のカートボタン実クリック+小窓待ち」にする
+        //   6/9 ログで判明: 同一ページ上の iframe 連打は 2発目以降ほぼ全部 /error/4/(bot拒否)。
+        //   HIROさんの手動フロー(押す→小窓を確認→次を押す)を再現するため、 2発目以降は実ボタンを click し
+        //   サイト本来の小窓(モーダル)が出るのを待って判定する。 1発目は従来 iframe のまま(無変更)。
+        //   ★既定 false (本番安全側 — 未検証の購入核心変更のため)。 ⚙設定「🧪」で ON にして実験。
+        realbutton_retry: false,
+        // 小窓が出るまで待つ上限(=死んだページ救出のみ)。 遅いだけの応答はこの範囲で待ち切る。
+        //   90秒 完全沈黙 = "遅い"ではなく"壊れている" と判断してリロード (HIROさん指定)。
+        realbutton_popup_wait_ms: 90000,
+        // ★Phase 17 (2026-06-10): iOS 表示中タブのみ稼働。 裏(hidden)のタブはカート投入・リロードを止める。
+        //   背景: HIROさん iOS Safari で複数 p-bandai タブを開くと裏タブも動いてしまう → 表示中の1枚だけにしたい。
+        //   true=表示中タブのみ / false=従来どおり全タブ並行(設計核心[D]の旧動作)。
+        //   ★既定 false (本番安全側 — iOS 実機未検証のため)。 HIROさん要望機能だが ⚙設定「📱」で ON にして検証。
+        //   ※ 旧来の「複数タブ並行監視」 を反転する設定。 HIROさん 明示要望(2026-06-10)。
+        foreground_only: false,
       },
       keepalive: {
         enabled: false,
@@ -1784,6 +1835,61 @@
     return lockResult;
   }
 
+  // ★Phase 16 (2026-06-09 実験): 2発目以降を「本物のカートボタン実クリック + 小窓待ち」で行う
+  //   背景: 6/9 ログで 同一ページ上の iframe 連打は 2発目以降ほぼ全部 /error/4/(bot拒否) と判明。
+  //   HIROさんの手動フロー(押す→小窓を確認→次を押す)を再現する:
+  //     - 本物ボタン(#buy / #buy_side)を click() → サイト本来の JS が小窓(モーダル)を出す
+  //     - 小窓が出るまで待つ(遅い応答もそのまま待ち切る。 早い見切りリロードはしない)
+  //     - 「入った」→ カート照合して SUCCESS / 「在庫なし・混雑・エラー」→ 閉じて次の押下へ
+  //     - waitCapMs(既定90秒)完全沈黙 = ページが死んでいる と判断 → DEAD_PAGE 返却(呼び元でリロード救出)
+  //   戻り値は attemptCartAddOnce 互換: { result, newOrderIds?, afterIds, timings, detail }
+  async function realButtonAttemptOnce(target, knownCartIds, waitCapMs) {
+    const t0 = Date.now();
+    const beforeIds = knownCartIds || [];
+    const cap = waitCapMs || 90000;
+    // dismissAnyPopup と同じエラー系文言(過剰一致を避けるため「売り切れ」等は入れない)
+    const ERR_RE = /大変混み合っているため|在庫がございません|追加できません|エラーが発生/;
+    const btn = document.getElementById('buy') || document.getElementById('buy_side');
+    const _mk = (result, extra) => Object.assign({ result, afterIds: beforeIds,
+      timings: { post: Date.now()-t0, body:0, decode:0, cartFetch:0, total: Date.now()-t0 } }, extra || {});
+    if (!btn) return _mk('UNCONFIRMED', { detail: 'realbtn-no-button' });
+    // 本物ボタンを実クリック(サイト本来の add-to-cart JS を発火させる)
+    try { btn.click(); } catch (e) { return _mk('UNCONFIRMED', { detail: 'realbtn-click-err:' + e.message }); }
+    // 小窓(モーダル)が出るまで待つ。 遅い応答も待ち切る。 cap 完全沈黙のみ救出
+    let outcome = null; // 'added' | 'error'
+    while (Date.now() - t0 < cap) {
+      if (loadState().paused === true) return _mk('PAUSED', { detail: 'realbtn-paused' });
+      if (detectCartAddedPopup()) { outcome = 'added'; break; }
+      const bs = buttonState();
+      if (bs.reason === 'ALREADY_IN_CART' || bs.reason === 'LIMIT') { outcome = 'added'; break; }
+      const bodyText = (document.body && document.body.innerText) || '';
+      if (ERR_RE.test(bodyText)) { outcome = 'error'; break; }
+      await sleep(200);
+    }
+    const total = Date.now() - t0;
+    const timings = { post: total, body: 0, decode: 0, cartFetch: 0, total: total };
+    if (outcome === 'added') {
+      // 自分の商品が本当に入ったか order 照合(keepalive 等の並行追加の誤検知を防ぐ)
+      const recheck = await getCartItemIds();
+      const ids = recheck.ids || [];
+      const newIds = ids.filter((x) => !beforeIds.includes(x));
+      const cf = findCartFormOnPage();
+      const oi = cf ? cf.querySelector('input[name="order"]') : null;
+      const expected = oi ? oi.value : null;
+      if (expected && newIds.includes(expected)) {
+        return { result: 'SUCCESS', newOrderIds: newIds, afterIds: ids, timings, detail: `realbtn-added(待ち${total}ms)` };
+      }
+      try { dismissAnyPopup(); } catch (_) {}
+      return { result: 'UNCONFIRMED', afterIds: (ids.length ? ids : beforeIds), timings, detail: `realbtn-added-no-match(待ち${total}ms)` };
+    }
+    if (outcome === 'error') {
+      try { dismissAnyPopup(); } catch (_) {}
+      return { result: 'UNCONFIRMED', afterIds: beforeIds, timings, detail: `realbtn-error-popup(待ち${total}ms)`, hadPopupMarker: true };
+    }
+    // cap 完全沈黙 = ページが死んでいる → 呼び元でリロード救出
+    return { result: 'DEAD_PAGE', afterIds: beforeIds, timings, detail: `realbtn-no-popup(沈黙${total}ms)` };
+  }
+
   // =================================================================
   // 8. 通知(Discord)
   // =================================================================
@@ -1968,6 +2074,12 @@
           recordMainLoopHeartbeat();
           return;
         }
+        // ★Phase 17 (2026-06-10): 表示中タブのみ稼働モードでは、 裏(hidden)タブを watchdog でリロードしない。
+        //   旧来 watchdog は 30秒ごとに reload するため、 これを抑えないと裏タブが動き続けてしまう。
+        if ((loadConfig().options || {}).foreground_only !== false && document.hidden) {
+          recordMainLoopHeartbeat();  // 表示復帰時の誤発火を防ぐため heartbeat は生かす
+          return;
+        }
         // ★商品ページじゃない時(ホーム/カテゴリ等)も watchdog 監視外
         if (typeof isProductPage === 'function' && !isProductPage()) {
           recordMainLoopHeartbeat();
@@ -2068,6 +2180,28 @@
     const cfg = loadConfig();
     const state = loadState();
     if (state.paused === true) { updateUI(); return; }
+
+    // ★Phase 17 (2026-06-10): iOS 表示中タブのみ稼働。 裏(hidden)タブはカート投入もリロードもしない。
+    //   foreground_only=true(既定) かつ タブが非表示なら、 何もせず待機 → 表示に戻ったら自動再開。
+    //   既存 vis-recovery は heartbeat 失効(>5秒)時のみ reload するため、 短時間の切替も拾えるよう
+    //   一度きりの visibilitychange リスナーで mainLoop を再開する(mainLoop の二重起動ガードで安全)。
+    if ((cfg.options || {}).foreground_only !== false && document.hidden) {
+      updateUI({ status: '🙈 裏のタブは停止中(このタブを表示すると再開)' });
+      pbLog('🙈','foreground','タブ非表示 → 待機(表示で自動再開)');
+      if (!window._pbFgResumeWaiting) {
+        window._pbFgResumeWaiting = true;
+        const _pbFgResume = () => {
+          if (!document.hidden) {
+            window._pbFgResumeWaiting = false;
+            document.removeEventListener('visibilitychange', _pbFgResume);
+            pbLog('👁','foreground','タブ表示 → 再開');
+            mainLoop();
+          }
+        };
+        document.addEventListener('visibilitychange', _pbFgResume);
+      }
+      return;
+    }
 
     const target = findTargetProduct(cfg, state);
     if (!target) {
@@ -2455,11 +2589,15 @@
     //         でも 30秒経過したら強制リロードで脱出する保険機構
     const _attemptLoopStartMs = Date.now();
     const ATTEMPT_LOOP_HARD_TIMEOUT_MS = 30000;
+    // ★Phase 16 (実験): 2発目以降を本物ボタン+小窓待ちにするか。 既定 true(silver-cat 実験)。
+    //   real-button モードでは各押下が自前の 90秒救出を持つため、 ループ全体の 30秒保険は使わない
+    //   (遅い小窓待ちを途中で切らないため)。 各反復は iframe(~10s) か real-button(~90s)で自己完結。
+    const realButtonMode = (cfg.options || {}).realbutton_retry !== false;
     for (let i = 0; i < RETRY_LIMIT; i++) {
       const cur = loadState();
       if (cur.paused === true) { updateUI(); return; }
-      // ★hard timeout チェック: 30秒経過なら強制脱出
-      if (Date.now() - _attemptLoopStartMs > ATTEMPT_LOOP_HARD_TIMEOUT_MS) {
+      // ★hard timeout チェック: 30秒経過なら強制脱出(real-button モードでは無効=小窓を待ち切る)
+      if (!realButtonMode && Date.now() - _attemptLoopStartMs > ATTEMPT_LOOP_HARD_TIMEOUT_MS) {
         pbLog('⚠','main',`連打 ${ATTEMPT_LOOP_HARD_TIMEOUT_MS/1000}秒到達 → 区切ってリロード(試行 ${i+1}/${RETRY_LIMIT} で長時間化)`);
         await humanSleep(timing().retry_fail_reload_sleep_ms);
         if (loadState().paused === true) { updateUI(); return; }
@@ -2584,10 +2722,17 @@
           : `🛒 カート投入 ${i+1}/${RETRY_LIMIT}`
       });
       // ★試行1回ごとにログ
-      pbLog('🛒','attempt',`カート投入 ${i+1}/${RETRY_LIMIT} POST 送信`);
+      // ★Phase 16 (実験): 1発目は従来 iframe(無変更)、 2発目以降は本物ボタン+小窓待ち
+      const _useRealBtn = realButtonMode && i >= 1;
+      pbLog('🛒','attempt',`カート投入 ${i+1}/${RETRY_LIMIT} ${_useRealBtn ? '本物ボタンclick' : 'POST送信'}`);
       // ★ログ整理: 個別試行ログは省略(連打終了時の集計のみ記録)
       // ★knownCartIds を渡して before fetch をスキップ(試行毎の fetch 1回減)
-      const r = await attemptCartAddOnce(target, knownCartIds);
+      let r;
+      if (_useRealBtn) {
+        r = await realButtonAttemptOnce(target, knownCartIds, (cfg.options || {}).realbutton_popup_wait_ms || 90000);
+      } else {
+        r = await attemptCartAddOnce(target, knownCartIds);
+      }
       // ★HIRO 2026-05-09: 「落ちる前のログ」要望 → 各試行の結果を必ず記録
       try {
         const _tm = r && r.timings;
@@ -2601,6 +2746,22 @@
       // 試行ごとの統計記録は廃止
       // 次試行用に knownCartIds を更新(変動分のみ)
       if (r.afterIds) knownCartIds = r.afterIds;
+      // ★Phase 16 (実験): 本物ボタンで停止押下を検知 → 即終了
+      if (r.result === 'PAUSED') { updateUI(); return; }
+      // ★Phase 16 (実験): 本物ボタンで小窓が一定時間出ず(ページ無応答)→ リロード救出
+      if (r.result === 'DEAD_PAGE') {
+        const _cap = (cfg.options || {}).realbutton_popup_wait_ms || 90000;
+        pbLog('🔄','phase16',`本物ボタン: ${Math.round(_cap/1000)}秒 小窓が出ず(ページ無応答)→ リロード救出`);
+        const sDP = loadState();
+        const atDP = sDP.productAttempts[target.id] || { reloads: 0 };
+        atDP.reloads = (atDP.reloads || 0) + 1;
+        sDP.productAttempts[target.id] = atDP;
+        saveState(sDP);
+        await humanSleep(timing().retry_fail_reload_sleep_ms);
+        if (loadState().paused === true) { updateUI(); return; }
+        await safeReload('realbtn-dead-page');
+        return;
+      }
       // カートイン成功ポップアップ検知(件数比較で SUCCESS 取れなかった時のフォールバック)
       if (r.result !== 'SUCCESS' && detectCartAddedPopup()) {
         // ★target の order ID で照合 → 並行追加(keepalive等)による誤検知を防ぐ
@@ -3675,7 +3836,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.14 2026-06-07 01:12 #7f2443 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.18 2026-06-10 23:13 #c3ac69 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -3806,6 +3967,33 @@
     pbLog('✅','ui','floating UI injected');
     return true;
   }
+
+  // ★Phase 18 (2026-06-10): FAB 自己修復 — ページが読込後に DOM を丸ごと差し替え、 注入した UI を消す事象に対応。
+  //   実測(2026-06-10 ブラウザ調査): document-end 時点 body=3要素(=薄い"白いページ") → 描画後 84要素に。
+  //   その際 documentElement ごと差し替えられ、 注入した FAB が消滅(ただし window 変数は生存)。
+  //   旧来は _uiInjected ガードで再注入もされず「モニターが商品ページで消える」 状態になっていた。
+  //   対策: FAB(#pb-fab)が DOM から消えていたら _uiInjected を戻して再注入し、 監視も再開する。
+  //   window は当該ページ生存中ずっと残るので setInterval が効く(全面リロード時は新規 boot で作り直される)。
+  //   ※ #pb-fab が健在なら getElementById チェックだけで即 return(コスト極小・チラつきなし)。
+  function ensureFloatingUI() {
+    try {
+      if (!document.body) return;
+      if (document.getElementById('pb-fab')) return;   // FAB 健在 → 何もしない
+      // FAB が消えた = ページが DOM を差し替えた → 再注入
+      _uiInjected = false;
+      injectFloatingUI();
+      try { renderErrorPanel(); } catch (_) {}
+      try { updateUI(); } catch (_) {}
+      pbLog('🔁','ui-heal','FAB消失検知 → 再注入(ページがDOMを差し替えた)');
+      // 差し替え後に描画された本体(#buy 等)を監視するため mainLoop を再起動(paused は尊重)
+      try { if (loadState().paused !== true) setTimeout(mainLoop, 0); } catch (_) {}
+    } catch (e) {}
+  }
+  function startFabSelfHeal() {
+    if (window._pbFabHealTimer) return;
+    try { window._pbFabHealTimer = setInterval(ensureFloatingUI, 700); } catch (_) {}
+  }
+
   function updateUI(extra) {
     const fab = $('#pb-fab');
     if (!fab) return;
@@ -4155,6 +4343,20 @@
           <div style="margin-top:10px;">
             <label><input type="checkbox" id="pb-auto-nuke"> 🚨 アクセス制限を連続検知したら自動でCookie削除(カート空時のみ)</label>
           </div>
+          <div style="margin-top:10px;">
+            <label><input type="checkbox" id="pb-realbutton-retry"> 🧪 <strong>2発目以降は本物ボタンを押す(実験)</strong></label>
+            <div style="font-size:11px;color:#b8a988;margin:4px 0 0 24px;line-height:1.5;">
+              1発目は従来どおり。 2発目以降は本物のカートボタンを実際に押して、 画面の小窓(入った/在庫なし)を見てから次へ。<br>
+              <strong>OFF にすると従来の連打方式に戻ります</strong>(うまく動かない時の保険)。
+            </div>
+          </div>
+          <div style="margin-top:10px;">
+            <label><input type="checkbox" id="pb-foreground-only"> 📱 <strong>表示中のタブだけ動かす(iOS向け)</strong></label>
+            <div style="font-size:11px;color:#b8a988;margin:4px 0 0 24px;line-height:1.5;">
+              今表示しているタブだけ監視・投入。 裏に回したタブは自動で停止し、 再び表示すると再開。<br>
+              <strong>OFF にすると開いている全タブが並行で動きます</strong>(従来動作)。
+            </div>
+          </div>
         </section>
 
         <section>
@@ -4241,6 +4443,8 @@
     modal.querySelector('#pb-auto-nuke').checked = !(cfg.options.auto_nuke_when_empty === false);
     modal.querySelector('#pb-low-power').checked = !!cfg.options.low_power_mode;
     modal.querySelector('#pb-lightweight-polling').checked = !(cfg.options.lightweight_polling === false);
+    { const _rb = modal.querySelector('#pb-realbutton-retry'); if (_rb) _rb.checked = !(cfg.options.realbutton_retry === false); }
+    { const _fg = modal.querySelector('#pb-foreground-only'); if (_fg) _fg.checked = !(cfg.options.foreground_only === false); }
     // ★明示的に true の時だけ ON、 デフォルト・未設定は OFF(再販品も監視するため)
     modal.querySelector('#pb-new-release-only').checked = cfg.options.new_release_only_mode === true;
     modal.querySelector('#pb-new-release-grace').value = cfg.options.new_release_grace_minutes != null ? cfg.options.new_release_grace_minutes : 30;
@@ -4988,6 +5192,15 @@
       // ★Phase 14: order 充填待ち(モーダル UI 無し → 既存値を維持。 既定 ON/4000ms)
       wait_order_fill_before_post: _prevOpts.wait_order_fill_before_post !== false,
       wait_order_fill_max_ms: _prevOpts.wait_order_fill_max_ms || 4000,
+      // ★Phase 16 (実験): 2発目以降の本物ボタン。 チェックボックスで切替、 無ければ既存値維持
+      realbutton_retry: (modal.querySelector('#pb-realbutton-retry')
+        ? modal.querySelector('#pb-realbutton-retry').checked
+        : (_prevOpts.realbutton_retry !== false)),
+      realbutton_popup_wait_ms: _prevOpts.realbutton_popup_wait_ms || 90000,
+      // ★Phase 17: 表示中タブのみ稼働。 チェックボックスで切替、 無ければ既存値維持
+      foreground_only: (modal.querySelector('#pb-foreground-only')
+        ? modal.querySelector('#pb-foreground-only').checked
+        : (_prevOpts.foreground_only !== false)),
     };
     c.keepalive = {
       enabled: modal.querySelector('#pb-ka-enabled').checked,
@@ -5341,7 +5554,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.14 2026-06-07 01:12 #7f2443 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.18 2026-06-10 23:13 #c3ac69 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -5456,6 +5669,8 @@
     // FAB注入(右下UI)
     injectFloatingUI();
     updateUI();
+    // ★Phase 18 (2026-06-10): FAB 自己修復を起動(p-bandai が読込後に DOM 差し替え→FAB消滅 する対策)
+    startFabSelfHeal();
 
     // タイマー & mainLoop はバナーと並行起動(バナー表示で投入処理が遅延しないこと)
     startKeepaliveTimer();
@@ -5559,7 +5774,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.14 2026-06-07 01:12 #7f2443 JST');
+    lines.push('🔧 build: v2.3.18 2026-06-10 23:13 #c3ac69 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
