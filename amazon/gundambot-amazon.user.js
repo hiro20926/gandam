@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.3.9.1
+// @version      0.3.9.2
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3297,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.3.9.1';
+    const SCRIPT_VERSION = '0.3.9.2';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -9167,21 +9167,23 @@
             if (!res || !res.ok) return out;
             const html = await res.text();
 
-            // ── 画像 (★v0.3.9.1: 広告画像の誤取得対策。商品メイン #landingImage を最優先) ──
-            // ① #landingImage 自身の data-a-dynamic-image (商品メイン画像・最優先・属性順不問)
-            let dyn = html.match(/<img[^>]*\bid=["']landingImage["'][^>]*\bdata-a-dynamic-image\s*=\s*["']([^"']+)["']/i)
-                   || html.match(/<img[^>]*\bdata-a-dynamic-image\s*=\s*["']([^"']+)["'][^>]*\bid=["']landingImage["']/i);
-            // ② imgTagWrapperId(メイン画像コンテナ)の内側にある data-a-dynamic-image
-            if (!dyn) {
-                dyn = html.match(/id=["']imgTagWrapperId["'][\s\S]{0,3000}?\bdata-a-dynamic-image\s*=\s*["']([^"']+)["']/i);
+            // ── 画像 (★v0.3.9.2: 実HTML(B07P6P55FM)で検証して確定。#landingImage の<img>タグ全体から抽出) ──
+            //   検証結果: src/data-old-hires は id="landingImage" より「前」にあり、og:image は無かった。
+            //   旧コードは「id 以降」しか見ず取りこぼしていた。タグ全体を取り data-a-dynamic > data-old-hires > src。
+            const liTag = (html.match(/<img\b[^>]*\bid=["']landingImage["'][^>]*>/i) || [''])[0]
+                       || (html.match(/<img\b[^>]*\bdata-a-image-name=["']landingImage["'][^>]*>/i) || [''])[0];
+            if (liTag) {
+                const dynM = liTag.match(/data-a-dynamic-image\s*=\s*["']([^"']+)["']/i);
+                if (dynM) { const best = pickLargestDynamicImage(decode(dynM[1])); if (best) out.img = upscaleAmazonImg(best); }
+                if (!out.img) { const oh = liTag.match(/\bdata-old-hires\s*=\s*["'](https:\/\/[^"']+?\.(?:jpg|jpeg|png))["']/i); if (oh) out.img = oh[1]; }
+                if (!out.img) { const sc = liTag.match(/\bsrc\s*=\s*["'](https:\/\/[^"']+?\.(?:jpg|jpeg|png))["']/i); if (sc) out.img = upscaleAmazonImg(sc[1]); }
             }
-            if (dyn) { const best = pickLargestDynamicImage(decode(dyn[1])); if (best) out.img = upscaleAmazonImg(best); }
-            // ③ #landingImage の src / data-old-hires
+            // フォールバック①: imgTagWrapperId(メイン画像コンテナ)内の data-a-dynamic-image
             if (!out.img) {
-                const li = html.match(/id=["']landingImage["'][^>]*>/i);
-                if (li) { const s = li[0].match(/(?:data-old-hires|src)=["'](https:\/\/[^"']+?\.(?:jpg|jpeg|png))["']/i); if (s) out.img = s[1]; }
+                const wrap = html.match(/id=["']imgTagWrapperId["'][\s\S]{0,3000}?\bdata-a-dynamic-image\s*=\s*["']([^"']+)["']/i);
+                if (wrap) { const best = pickLargestDynamicImage(decode(wrap[1])); if (best) out.img = upscaleAmazonImg(best); }
             }
-            // ④ og:image (商品の代表画像。Amazonが設定するので広告ではないことが多い)
+            // フォールバック②: og:image (この商品には無いが、他商品用)
             if (!out.img) {
                 const ogimg = html.match(/<meta[^>]*\bproperty=["']og:image["'][^>]*>/i);
                 if (ogimg) { const c = ogimg[0].match(/content=["']([^"']+)["']/i); if (c) out.img = decode(c[1]); }
