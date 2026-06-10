@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.1.4
+// @version      1.1.5
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.1.4';
+    const SCRIPT_VERSION = 'PC-1.1.5';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -9484,22 +9484,27 @@
             if (!res || !res.ok) return out;
             const html = await res.text();
 
-            // ── 画像 ──
-            // ① data-a-dynamic-image の最大解像度 (商品メイン画像、最も確実)
-            const dyn = html.match(/data-a-dynamic-image\s*=\s*"([^"]+)"/i) ||
-                        html.match(/data-a-dynamic-image\s*=\s*'([^']+)'/i);
-            if (dyn) { const best = pickLargestDynamicImage(decode(dyn[1])); if (best) out.img = upscaleAmazonImg(best); }
-            // ② og:image (属性順不問)
-            if (!out.img) {
-                const ogimg = html.match(/<meta[^>]*\bproperty=["']og:image["'][^>]*>/i);
-                if (ogimg) { const c = ogimg[0].match(/content=["']([^"']+)["']/i); if (c) out.img = decode(c[1]); }
+            // ── 画像 (★PC-1.1.5: 広告画像の誤取得対策。商品メイン #landingImage を最優先) ──
+            // ① #landingImage 自身の data-a-dynamic-image (商品メイン画像・最優先・属性順不問)
+            let dyn = html.match(/<img[^>]*\bid=["']landingImage["'][^>]*\bdata-a-dynamic-image\s*=\s*["']([^"']+)["']/i)
+                   || html.match(/<img[^>]*\bdata-a-dynamic-image\s*=\s*["']([^"']+)["'][^>]*\bid=["']landingImage["']/i);
+            // ② imgTagWrapperId(メイン画像コンテナ)の内側にある data-a-dynamic-image
+            if (!dyn) {
+                dyn = html.match(/id=["']imgTagWrapperId["'][\s\S]{0,3000}?\bdata-a-dynamic-image\s*=\s*["']([^"']+)["']/i);
             }
-            // ③ landingImage の src / data-old-hires
+            if (dyn) { const best = pickLargestDynamicImage(decode(dyn[1])); if (best) out.img = upscaleAmazonImg(best); }
+            // ③ #landingImage の src / data-old-hires
             if (!out.img) {
                 const li = html.match(/id=["']landingImage["'][^>]*>/i);
                 if (li) { const s = li[0].match(/(?:data-old-hires|src)=["'](https:\/\/[^"']+?\.(?:jpg|jpeg|png))["']/i); if (s) out.img = s[1]; }
             }
-            // ※ v0.3.8.91 の「最初の /images/I/ 画像」フォールバックは撤去 (ロゴ誤取得の原因)
+            // ④ og:image (商品の代表画像。Amazonが設定するので広告ではないことが多い)
+            if (!out.img) {
+                const ogimg = html.match(/<meta[^>]*\bproperty=["']og:image["'][^>]*>/i);
+                if (ogimg) { const c = ogimg[0].match(/content=["']([^"']+)["']/i); if (c) out.img = decode(c[1]); }
+            }
+            // ※ 「ページ内で最初の data-a-dynamic-image」フォールバックは、上部のスポンサー広告を
+            //   拾う原因(HIRO報告 B07P6P55FM)なので使わない。商品メイン画像が取れなければ画像なしにする。
 
             // ── 商品名 ──
             // ① og:title
@@ -14926,6 +14931,26 @@
                     try { logAm('info', 'migration',
                         'v0.3.8.94: 誤取得の商品画像を全クリア → 次回 🏠 で正画像を取り直し',
                         { cleared: imgKeys.length }); } catch (e) {}
+                }
+            }
+        } catch (e) {}
+
+        // ★PC-1.1.5: スポンサー広告の画像を誤取得していた分を 1 回だけ全クリア。
+        //   fetchProductMeta を「商品メイン #landingImage 優先」に直したので、次回 商品ページ/🏠 訪問で
+        //   正しい商品画像を取り直す。画像は飾り用データのみ・再取得は軽量なので全消去で安全。1 回限り。
+        try {
+            if (!localStorage.getItem('LB_AM_MIG_IMG_PC115')) {
+                const imgKeys2 = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const k = localStorage.key(i);
+                    if (k && k.startsWith('LB_AM_PRODUCT_IMG_')) imgKeys2.push(k);
+                }
+                for (const k of imgKeys2) { try { localStorage.removeItem(k); } catch (e) {} }
+                localStorage.setItem('LB_AM_MIG_IMG_PC115', String(Date.now()));
+                if (imgKeys2.length > 0) {
+                    try { logAm('info', 'migration',
+                        'PC-1.1.5: スポンサー広告の誤画像を全クリア → 次回 商品ページ/🏠 で正画像を取り直し',
+                        { cleared: imgKeys2.length }); } catch (e) {}
                 }
             }
         } catch (e) {}
