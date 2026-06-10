@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.19 2026-06-10 23:23 #1e2dd7 JST
+// @version      v2.3.20 2026-06-10 23:31 #a79ff9 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1421,10 +1421,38 @@
           if (!isNaN(dt.getTime())) { release_time = dt.toISOString(); break; }
         }
       }
+      // ★★★ Phase 20 (2026-06-10): JS描画ページ対応 — サーバHTMLが空でも描画済みDOMから補完 ★★★
+      //   2026-06-10 実測: p-bandai は title/og/h1 を JS 描画にした → fetch した生HTMLは <title> 空・og無し・h1=0。
+      //   そのため title/og/h1 由来の name が null になり「商品名取得失敗」になる。
+      //   対策: 登録対象が「今表示中のページ」 なら、 描画済みの document.title(=商品名が入っている)から補完する。
+      //   release_time も同様に、 取れなければ描画済み本文から再抽出する。
+      let _name = name;
+      let _release = release_time;
+      try {
+        const _cur = (typeof currentProductUrl === 'function') ? currentProductUrl() : null;
+        const _tgt = (typeof normalizeProductUrl === 'function') ? normalizeProductUrl(productUrl) : productUrl;
+        const _isCurrentPage = !!(_cur && _tgt && _cur === _tgt);
+        if (_isCurrentPage && (!_name || !_release)) {
+          if (!_name) {
+            const _dt = (document.title || '').split(/\s*[|｜]\s*/)[0].replace(/<[^>]+>/g,'').trim();
+            if (_dt && _dt.length >= 5 && _dt.length <= 200 && !SHARE_RE.test(_dt)) {
+              _name = _dt;
+              pbLog('🔍','extract',`描画DOM(document.title)から商品名を補完: "${_dt}" (JS描画ページ対応)`);
+            }
+          }
+          if (!_release) {
+            const _bodyFlat = ((document.body && document.body.innerText) || '').replace(/&nbsp;/g,' ').replace(/\s+/g,' ');
+            for (const re of patterns) {
+              const m = _bodyFlat.match(re);
+              if (m) { const _d = new Date(Date.UTC(+m[1], +m[2]-1, +m[3], +m[4]-9, 0, 0)); if (!isNaN(_d.getTime())) { _release = _d.toISOString(); pbLog('🔍','extract',`描画DOM本文から発売時刻を補完: ${_release}`); break; } }
+            }
+          }
+        }
+      } catch (_e) {}
       // 商品名に「【再販】」「再販」を含めば再販扱いの示唆
-      const isRestockHinted = !!(name && /【再販】|再販分|再販予約|\(再販\)/.test(name));
-      pbLog('📝','fetch',`name=${(name||'').substring(0,40)} release=${release_time||'なし'} restockHint=${isRestockHinted}`);
-      return { name, release_time, isRestockHinted };
+      const isRestockHinted = !!(_name && /【再販】|再販分|再販予約|\(再販\)/.test(_name));
+      pbLog('📝','fetch',`name=${(_name||'').substring(0,40)} release=${_release||'なし'} restockHint=${isRestockHinted}`);
+      return { name: _name, release_time: _release, isRestockHinted };
     } catch (e) {
       pbLog('❌','fetch','exception: '+e.message);
       return { error: 'NETWORK: '+e.message };
@@ -3872,7 +3900,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.19 2026-06-10 23:23 #1e2dd7 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.20 2026-06-10 23:31 #a79ff9 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -5590,7 +5618,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.19 2026-06-10 23:23 #1e2dd7 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.20 2026-06-10 23:31 #a79ff9 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -5810,7 +5838,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.19 2026-06-10 23:23 #1e2dd7 JST');
+    lines.push('🔧 build: v2.3.20 2026-06-10 23:31 #a79ff9 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
