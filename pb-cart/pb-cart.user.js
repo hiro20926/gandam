@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.18 2026-06-10 23:13 #c3ac69 JST
+// @version      v2.3.19 2026-06-10 23:23 #1e2dd7 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -240,6 +240,15 @@
   //     再注入 + mainLoop 再起動。 実ページで wipe を再現し自己修復が復活させることを実証済み。
   //     ★これはオプション無しの常時ON(純粋な修復、 副作用なし)。 #pb-fab 健在時は getElementById チェックのみで即return。
   //     ★injectFloatingUI のイベントは全て FAB ローカル(.onclick on 新要素)なので再実行で document リスナー重複なし。
+  //
+  // [W] Phase 19 (2026-06-10 緊急修正・[V]の続き): 遅延描画待ち — 「白い画面のままリロード地獄」 の根治。 ★全版必須★
+  //     [V]で FAB は残るようになったが、 p-bandai の遅延描画(白いシェル→2〜5秒後に商品DOM)により #buy が
+  //     document-end 時点で存在せず、 ツールが NO_BUTTON→即リロードと誤判定 → 描画前に ~500ms でリロード連発
+  //     → 商品が永遠に描画されない(実機ログ 562 boots / grey-mid 333)。
+  //     対策(mainLoopBody, bsEarly 直前): #buy も #buy_side も無い=未描画なら、 描画(ボタン出現)を
+  //     render_wait_max_ms(既定8000ms)まで 200ms ポーリングで待つ。 出たら即抜け、 上限なら続行。
+  //     ★#buy が在れば(grey でも)待たない → 発売時の青検知の速さ・攻め戦略は不変。
+  //     ※ [V]自己修復 と [W]描画待ち は p-bandai の「読込後DOM丸ごと再描画」 という同一原因の両輪。
   //
   // 過去の事故ログは HISTORY.md、 設計詳細は CLAUDE.md を参照。
   // 動いている仕組みを壊さないための鉄則:
@@ -691,6 +700,7 @@
     'phase16',                     // ★Phase 16 本物ボタン+小窓待ち (実験の核心計測)
     'foreground',                  // ★Phase 17 表示中タブのみ稼働 (裏タブ停止/再開)
     'ui-heal',                     // ★Phase 18 FAB自己修復 (DOM差し替えで消えたFABの再注入)
+    'render',                      // ★Phase 19 遅延描画待ち (白いシェル→商品描画の待機計測)
   ]);
   // ★タブ ID (sessionStorage、 タブ独立 + reload 跨ぎで安定。 事故 5 paused と同じ流儀)
   const TAB_ID = (() => {
@@ -1059,6 +1069,9 @@
         //   ★既定 false (本番安全側 — iOS 実機未検証のため)。 HIROさん要望機能だが ⚙設定「📱」で ON にして検証。
         //   ※ 旧来の「複数タブ並行監視」 を反転する設定。 HIROさん 明示要望(2026-06-10)。
         foreground_only: false,
+        // ★Phase 19 (2026-06-10): p-bandai 遅延描画(白いシェル→数秒後に商品DOM)対応。
+        //   #buy が未描画なら最大この時間まで描画を待ってから判定(描画前リロード地獄を防ぐ)。
+        render_wait_max_ms: 8000,
       },
       keepalive: {
         enabled: false,
@@ -2312,6 +2325,29 @@
       //   → 50ms 毎に最大10回(= 500ms) ポーリング
       //   ★2026-06-04 HIROさん 指摘で 5→10 に戻す: HIROさん 成功例は 500-700ms 以内なので
       //     5回(250ms)では青ボタンが 300-700ms で出るケースを取り逃していた (過去に勝手に半減させた誤り)
+      // ★★★ Phase 19 (2026-06-10): p-bandai 遅延描画対応 ★★★
+      //   2026-06-10 実測: p-bandai は読込後にまず薄い「白いシェル」(body 3要素)を出し、 2〜5秒かけて
+      //   商品DOMを丸ごと描画する方式に変わった。 #buy はこの描画後に出現する。
+      //   旧来は document-end(=白いシェル段階)で #buy 無し→NO_BUTTON→即リロード判定 → 描画前にリロード連発
+      //   → 商品が永遠に描画されず「白い画面のままリロード地獄」 になっていた(562 boots/log)。
+      //   対策: #buy も #buy_side も無い=まだ描画前 なら、 描画(ボタン出現)を最大 render_wait_max_ms 待つ。
+      //     - ボタンが出たら即抜けて通常判定へ(発売時の青検知の速さは維持: #buy が在れば待たない)
+      //     - 上限まで出なければそのまま進む(本当にボタンの無いページ等)
+      if (!document.getElementById('buy') && !document.getElementById('buy_side')) {
+        const _rWaitCap = (cfg.options || {}).render_wait_max_ms || 8000;
+        const _rt0 = Date.now();
+        let _rendered = false;
+        updateUI({ status: '🖼 商品ページ描画待ち(白いシェル検知)' });
+        while (Date.now() - _rt0 < _rWaitCap) {
+          if (loadState().paused === true) { updateUI(); return; }
+          if (isSettingsModalOpen()) break;
+          if (document.getElementById('buy') || document.getElementById('buy_side')) { _rendered = true; break; }
+          await sleep(200);
+        }
+        pbLog(_rendered ? '🖼' : '⏳', 'render',
+          _rendered ? `商品描画を確認(待ち${Date.now()-_rt0}ms) → ボタン判定へ`
+                    : `${_rWaitCap}ms 待っても #buy 未描画 → そのまま判定へ(白いシェル/無ボタンページ)`);
+      }
       let bsEarly = buttonState();
       if (!bsEarly.clickable) {
         for (let i = 0; i < 10; i++) {
@@ -3836,7 +3872,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.18 2026-06-10 23:13 #c3ac69 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.19 2026-06-10 23:23 #1e2dd7 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -5554,7 +5590,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.18 2026-06-10 23:13 #c3ac69 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.19 2026-06-10 23:23 #1e2dd7 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -5774,7 +5810,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.18 2026-06-10 23:13 #c3ac69 JST');
+    lines.push('🔧 build: v2.3.19 2026-06-10 23:23 #1e2dd7 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
