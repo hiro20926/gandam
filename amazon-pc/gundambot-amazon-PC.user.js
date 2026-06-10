@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.1.6
+// @version      1.1.7
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.1.6';
+    const SCRIPT_VERSION = 'PC-1.1.7';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -9439,19 +9439,29 @@
     const extractProductImage = () => {
         try {
             const getters = [
-                // ★v0.3.8.93: data-a-dynamic-image の最大解像度 (最優先=商品メイン画像)
+                // ★PC-1.1.7: スポンサー広告の誤取得を根絶。実DOM(B07P6P55FM)で検証:
+                //   旧コードの querySelector('#landingImage…, …, img[data-a-dynamic-image]') は
+                //   カンマ列挙=「DOM順で最初に一致した要素」を返すため、#landingImage より上にある
+                //   関連/スポンサー画像(class=…afProductImageImg…)を拾い、商品でなく広告画像を保存していた。
+                //   → 包括 img[data-a-dynamic-image] を撤去し、商品メイン画像コンテナに限定して優先順に評価。
+                // ① 商品メイン画像コンテナ内の data-a-dynamic-image (最大解像度)
                 () => {
-                    const el = document.querySelector('#landingImage[data-a-dynamic-image], #imgTagWrapperId img[data-a-dynamic-image], img[data-a-dynamic-image]');
+                    const el = document.querySelector('#landingImage[data-a-dynamic-image]')
+                            || document.querySelector('#imgTagWrapperId img[data-a-dynamic-image]')
+                            || document.querySelector('#imageBlock img[data-a-dynamic-image]');
                     if (!el) return '';
                     const best = pickLargestDynamicImage(el.getAttribute('data-a-dynamic-image') || '');
                     return best ? upscaleAmazonImg(best) : '';
                 },
-                () => { const m = document.querySelector('meta[property="og:image"]'); return m && m.getAttribute('content'); },
+                // ② #landingImage の data-old-hires / currentSrc / src
                 () => { const i = document.getElementById('landingImage'); return i && (i.getAttribute('data-old-hires') || i.currentSrc || i.src); },
+                // ③ メイン画像コンテナ #imgTagWrapperId 内の img
                 () => { const i = document.querySelector('#imgTagWrapperId img'); return i && (i.getAttribute('data-old-hires') || i.src); },
+                // ④ #main-image / #imageBlock (いずれも商品メイン画像ブロック)
                 () => { const i = document.getElementById('main-image'); return i && i.src; },
                 () => { const i = document.querySelector('#imageBlock img, #ivLargeImage img, #ebooksImgBlkFront'); return i && i.src; },
-                () => { const i = document.querySelector('#dp img.a-dynamic-image, #ppd img.a-dynamic-image'); return i && i.src; },
+                // ⑤ og:image (商品固有・広告ではない。最後の手段)
+                () => { const m = document.querySelector('meta[property="og:image"]'); return m && m.getAttribute('content'); },
             ];
             for (const g of getters) {
                 try {
@@ -14952,6 +14962,27 @@
                     try { logAm('info', 'migration',
                         'PC-1.1.5: スポンサー広告の誤画像を全クリア → 次回 商品ページ/🏠 で正画像を取り直し',
                         { cleared: imgKeys2.length }); } catch (e) {}
+                }
+            }
+        } catch (e) {}
+
+        // ★PC-1.1.7: ライブDOM経路(extractProductImage)が #landingImage より上の関連/スポンサー
+        //   画像を誤取得していた分を 1 回だけ全クリア。商品ページ訪問のたびに上書き保存されるため
+        //   .115 のクリア後も再混入していた。抽出を商品メイン画像コンテナ限定に直したので、
+        //   次回 商品ページ/🏠 で正画像を取り直す。1 回限り。
+        try {
+            if (!localStorage.getItem('LB_AM_MIG_IMG_PC117')) {
+                const imgKeys3 = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const k = localStorage.key(i);
+                    if (k && k.startsWith('LB_AM_PRODUCT_IMG_')) imgKeys3.push(k);
+                }
+                for (const k of imgKeys3) { try { localStorage.removeItem(k); } catch (e) {} }
+                localStorage.setItem('LB_AM_MIG_IMG_PC117', String(Date.now()));
+                if (imgKeys3.length > 0) {
+                    try { logAm('info', 'migration',
+                        'PC-1.1.7: 広告誤取得(ライブDOM)分を全クリア → 次回 商品ページ/🏠 で正画像を取り直し',
+                        { cleared: imgKeys3.length }); } catch (e) {}
                 }
             }
         } catch (e) {}
