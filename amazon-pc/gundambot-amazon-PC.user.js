@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.1.9
+// @version      1.2.0
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.1.9';
+    const SCRIPT_VERSION = 'PC-1.2.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -13363,6 +13363,39 @@
         return fired;
     };
 
+    // ★PC-1.2.0: 注文確定に至れなかった時の「自動復帰」(HIRO要望:注文できなくても止めず監視ループへ)
+    //   旧挙動: failsafe NG / 確定ボタン未検出 などで clearState()+setStopped() を呼ぶと、
+    //     clearState()→opFullStop()→clearSession() で【セッションが破棄】され、さらに一時停止。
+    //     結果、放置後に ▶再開 しても getSession()=null で「再開失敗: セッションなし」になっていた。
+    //   新挙動: この時点では「注文を確定する」click は一切していない=注文は出ていないので、
+    //     セッションを保持したまま商品ページ(session.productUrl)へ戻り、RUNNING のままループ継続する。
+    //     ※二重注文の危険は無い(click 前の中断のみがここを通る)。
+    const recoverToMonitorLoop = (reason) => {
+        let backUrl = '';
+        try { const s = S.getSession(); if (s && s.productUrl) backUrl = s.productUrl; } catch (e) {}
+        try { logAm('warn', 'order-confirm-recovery',
+            '↩ ' + reason + ' → 監視ループに自動復帰 (停止せずセッション保持)',
+            { hasBackUrl: !!backUrl, url: location.href.slice(0, 150) }); } catch (e) {}
+        try { toast('↩ ' + reason + '\n→ 監視ループに自動復帰 (停止しません)', '#f57c00', 5000); } catch (e) {}
+        if (!backUrl) {
+            // 復帰先が全く取れない異常時のみ従来どおり完全停止
+            try { clearState(); setStopped(true); } catch (e) {}
+            return;
+        }
+        try { S.setStep(STEP_IDLE); } catch (e) {}
+        setTimeout(() => {
+            try {
+                if (isStopped()) return;
+                const u = new URL(backUrl);
+                u.searchParams.set('_pageRefresh', String(Date.now()));
+                u.searchParams.set('_sw', String(Date.now()));
+                if (CONFIG.autoForceAmazon) u.searchParams.set('m', AMAZON_SELLER_ID);
+                u.searchParams.delete('aod');
+                location.href = u.toString();
+            } catch (e) { try { location.href = backUrl; } catch (e2) {} }
+        }, 1200);
+    };
+
     const performOrderConfirm = async (rootEl, contextLabel) => {
         if (isStopped()) return false;
 
@@ -13461,7 +13494,7 @@
                 verifiedRecent ? 6000 : 15000
             );
             if (!verifiedRecent) {
-                clearState(); setStopped(true); return false;
+                recoverToMonitorLoop('failsafe NG（直販未確認）'); return false;
             }
             // verifiedRecent=true && マケプレでない → 続行
         }
@@ -13482,7 +13515,7 @@
                 samples.slice(0, 4).join('\n'),
                 STOP_RED, 15000
             );
-            clearState(); setStopped(true); return false;
+            recoverToMonitorLoop('「注文を確定する」未検出'); return false;
         }
 
         const totalDisp = verify.total !== null ? `¥${verify.total.toLocaleString()}` : '?';
@@ -13652,10 +13685,9 @@
         if (!placeBtn) {
             // ★v0.1.16.8: SPC ボタン未検出は error
             try {
-                logAm('error', 'checkout', 'SPC: 「注文を確定する」が現れません(10秒)→ 停止');
+                logAm('warn', 'checkout', 'SPC: 「注文を確定する」が現れません(10秒)→ 監視ループに自動復帰');
             } catch (e) {}
-            toast('❌ SPC: 「注文を確定する」が現れません(10秒)', STOP_RED, 10000);
-            clearState(); setStopped(true); return;
+            recoverToMonitorLoop('確定ボタンが10秒現れない'); return;
         }
         try {
             logAm('info', 'checkout', `SPC: 「注文を確定する」検出(待機 ${waitMs}ms)`);
