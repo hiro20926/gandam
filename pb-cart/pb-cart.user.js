@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.21 2026-06-11 21:25 #a30dd0 JST
+// @version      v2.3.22 2026-06-11 21:39 #6205a8 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -337,6 +337,9 @@
     'サイト閲覧状況に関するお知らせ',
     'ただいまサイトは大変混雑し',
     '過度なクリックやリロードはさらに混雑する原因',
+    // ★Phase 22 (2026-06-11): Akamai(CDN) のエッジエラー/ブロック画面(発売殺到で防御強化時)
+    'An error occurred while processing your request',
+    'errors.edgesuite.net',
   ];
   const CART_FAIL_KEYWORDS = [
     '大変混み合っているため、カートに入れることができませんでした',
@@ -701,6 +704,7 @@
     'foreground',                  // ★Phase 17 表示中タブのみ稼働 (裏タブ停止/再開)
     'ui-heal',                     // ★Phase 18 FAB自己修復 (DOM差し替えで消えたFABの再注入)
     'render',                      // ★Phase 19 遅延描画待ち (白いシェル→商品描画の待機計測)
+    'akamai-block',                // ★Phase 22 Akamai防御強化検知→クールダウン
   ]);
   // ★タブ ID (sessionStorage、 タブ独立 + reload 跨ぎで安定。 事故 5 paused と同じ流儀)
   const TAB_ID = (() => {
@@ -1076,6 +1080,9 @@
         // ★Phase 19 (2026-06-10): p-bandai 遅延描画(白いシェル→数秒後に商品DOM)対応。
         //   #buy が未描画なら最大この時間まで描画を待ってから判定(描画前リロード地獄を防ぐ)。
         render_wait_max_ms: 8000,
+        // ★Phase 22 (2026-06-11): Akamai 防御強化(発売殺到時のブロック/ホーム弾き返し)検知時のクールダウン。
+        //   即リロードせずこの時間待ってピークをやり過ごす(ブロック長期化を防ぐ)。
+        akamai_cooldown_ms: 40000,
       },
       keepalive: {
         enabled: false,
@@ -1233,6 +1240,31 @@
   const detectAccessControl = (t) => ACCESS_CONTROL_KEYWORDS.some(k => t.includes(k));
   const detectCartFailBusy = (t) => CART_FAIL_KEYWORDS.some(k => t.includes(k));
   const detectStockOut = (t) => STOCK_OUT_KEYWORDS.some(k => t.includes(k));
+
+  // ★Phase 22 (2026-06-11): Akamai(CDN) の「発売殺到時の防御強化」 ブロック/弾き返しを検知する。
+  //   6/11発売ログで判明: 発売直後に Akamai が item ページ要求を / (ホーム) や /tbdlp/ に弾き返し、
+  //   一部を edgesuite エラー画面(「An error occurred while processing your request」 + Reference #)にし、
+  //   応答を15〜22秒に激遅化していた。 ツールはこれを認識せず描画待ち→リロードを繰り返し、 混雑にリクエストを
+  //   ぶつけ続けてブロックを長引かせるリスクがあった。 検知できたら即リロードせずクールダウンする。
+  //   返り値: 'edge'(エッジエラー画面) / 'bounce'(商品監視中なのにホーム弾き返し) / null
+  function detectAkamaiBlock() {
+    try {
+      const text = (document.body && document.body.innerText || '').slice(0, 2000);
+      if (/An error occurred while processing your request|errors\.edgesuite\.net|Reference #\s*\d/i.test(text)) {
+        return 'edge';
+      }
+      // ホーム弾き返し: リロードで来たのに商品ページでなく / または /tbdlp/ に着地 + 監視対象あり
+      const p = (location.pathname || '');
+      if (p === '/' || /^\/tbdlp\//.test(p)) {
+        let isReload = false;
+        try { const nav = performance.getEntriesByType && performance.getEntriesByType('navigation')[0]; isReload = !!(nav && nav.type === 'reload'); } catch (_) {}
+        let hasTargets = false;
+        try { const c = loadConfig(); hasTargets = (c.products || []).some(pr => pr.url && !pr.acquired); } catch (_) {}
+        if (isReload && hasTargets) return 'bounce';
+      }
+    } catch (_) {}
+    return null;
+  }
 
   function normalizeProductUrl(u) {
     if (!u) return null;
@@ -2246,6 +2278,23 @@
         document.addEventListener('visibilitychange', _pbFgResume);
       }
       return;
+    }
+
+    // ★Phase 22 (2026-06-11): Akamai(CDN) 防御強化(発売殺到時のブロック/ホーム弾き返し)を検知 → クールダウン。
+    //   即リロードで混雑にリクエストをぶつけ続けると、 ブロックを長引かせ自滅する。 検知したら数十秒待ってから再開。
+    //   edge=エッジエラー画面 / bounce=商品監視中なのにホームへ弾き返し。
+    {
+      const _akBlock = detectAkamaiBlock();
+      if (_akBlock) {
+        const _cd = (cfg.options || {}).akamai_cooldown_ms || 40000;
+        pbError('warn','akamai-block',
+          `Akamai防御強化を検知(${_akBlock==='edge'?'エッジエラー画面':'ホーム弾き返し'}) → ${Math.round(_cd/1000)}秒クールダウン(殺到ピーク回避・即リロードしない)`);
+        updateUI({ status: `🛡 Akamai防御強化を検知\n${Math.round(_cd/1000)}秒待機して殺到ピークをやり過ごします` });
+        if (await interruptibleSleep(_cd)) { updateUI(); return; }   // 停止押下で即中断
+        if (loadState().paused === true) { updateUI(); return; }
+        await safeReload('akamai-cooldown');
+        return;
+      }
     }
 
     const target = findTargetProduct(cfg, state);
@@ -3925,7 +3974,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.21 2026-06-11 21:25 #a30dd0 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.22 2026-06-11 21:39 #6205a8 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -5644,7 +5693,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.21 2026-06-11 21:25 #a30dd0 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.22 2026-06-11 21:39 #6205a8 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -5864,7 +5913,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.21 2026-06-11 21:25 #a30dd0 JST');
+    lines.push('🔧 build: v2.3.22 2026-06-11 21:39 #6205a8 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
