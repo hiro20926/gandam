@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.23 2026-06-11 21:46 #f64f1b JST
+// @version      v2.3.24 2026-06-11 21:55 #1ef7b4 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1597,8 +1597,8 @@
     const SUCCESS_WORDS = /カートに商品が追加されました|カートに追加しました|カートインしました/;
     // keepSuccess=true なら成功ポップアップは閉じない
     const TRIGGER_WORDS = opts.keepSuccess
-      ? /大変混み合っているため|在庫がございません|追加できません|エラーが発生/
-      : /大変混み合っているため|在庫がございません|追加できません|エラーが発生|カートに商品が追加されました|カートに追加しました/;
+      ? /大変混み合っているため|在庫がございません|追加できません|エラーが発生|注文できる商品がございません|販売(を|が)?終了|受付(を|が)?終了|完売/
+      : /大変混み合っているため|在庫がございません|追加できません|エラーが発生|注文できる商品がございません|販売(を|が)?終了|受付(を|が)?終了|完売|カートに商品が追加されました|カートに追加しました/;
     // 1. 「閉じる」「✕」「×」テキストを持つボタン
     const closeCandidates = $$('button, a, span, div').filter(e => {
       const t = (e.innerText || '').trim();
@@ -1931,8 +1931,9 @@
     const t0 = Date.now();
     const beforeIds = knownCartIds || [];
     const cap = waitCapMs || 90000;
-    // dismissAnyPopup と同じエラー系文言(過剰一致を避けるため「売り切れ」等は入れない)
-    const ERR_RE = /大変混み合っているため|在庫がございません|追加できません|エラーが発生/;
+    // エラー/売り切れ系文言。 ★Phase 21b (2026-06-11): 実発売で「注文できる商品がございません」 が出て
+    //   ERR_RE に無く realButtonAttemptOnce が約30-47秒スタックした(watchdog救出まで固まる)→ 追加。
+    const ERR_RE = /大変混み合っているため|在庫がございません|追加できません|エラーが発生|注文できる商品がございません|販売(を|が)?終了|受付(を|が)?終了|完売/;
     const btn = document.getElementById('buy') || document.getElementById('buy_side');
     const _mk = (result, extra) => Object.assign({ result, afterIds: beforeIds,
       timings: { post: Date.now()-t0, body:0, decode:0, cartFetch:0, total: Date.now()-t0 } }, extra || {});
@@ -1948,6 +1949,20 @@
       if (bs.reason === 'ALREADY_IN_CART' || bs.reason === 'LIMIT') { outcome = 'added'; break; }
       const bodyText = (document.body && document.body.innerText) || '';
       if (ERR_RE.test(bodyText)) { outcome = 'error'; break; }
+      // ★Phase 21b (2026-06-11): 既知文言外の小窓も取りこぼさない一般化。 クリック後に「閉じる/✕」付きの
+      //   小さい小窓(Cookie同意系を除く)が出ていたら「未知のエラー小窓」 として扱う(長時間スタック防止)。
+      let _unknownPopup = false;
+      try {
+        const _cands = $$('button, a, span, div');
+        for (const _e of _cands) {
+          const _t = (_e.innerText || '').trim();
+          if (_t === '閉じる' || _t === '✕' || _t === '×') {
+            const _near = (((_e.closest && _e.closest('div,section,dialog,article')) || _e).innerText || '');
+            if (_near.length > 0 && _near.length < 400 && !/Cookie|クッキー|同意|consent|許可する/i.test(_near)) { _unknownPopup = true; break; }
+          }
+        }
+      } catch (_) {}
+      if (_unknownPopup) { outcome = 'error'; break; }
       await sleep(200);
     }
     const total = Date.now() - t0;
@@ -3976,7 +3991,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.23 2026-06-11 21:46 #f64f1b JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.24 2026-06-11 21:55 #1ef7b4 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -5695,7 +5710,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.23 2026-06-11 21:46 #f64f1b JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.24 2026-06-11 21:55 #1ef7b4 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -5915,7 +5930,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.23 2026-06-11 21:46 #f64f1b JST');
+    lines.push('🔧 build: v2.3.24 2026-06-11 21:55 #1ef7b4 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
