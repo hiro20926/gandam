@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.1.7
+// @version      1.1.8
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.1.7';
+    const SCRIPT_VERSION = 'PC-1.1.8';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -14406,10 +14406,12 @@
         const transAmUrl = asin ? getSavedTransAmUrl(asin) : null;
 
         // ★ 人間っぽい "在庫切れ画面を読む時間" ★
-        //   ★PC-1.1.3: CAPTCHA(本物のbot検知)が出たため 1.5〜5.5秒に拡大(HIRO指示「リトライ間隔7秒以内」)。
-        //     navigate ~0.75-1.5秒と合算で、商品〜商品の間隔が約2.5〜7秒(7秒以内・ランダム)になる。
-        //     アクセス頻度を従来(約2秒)の約1/3に落として bot検知/CAPTCHA を予防する。
-        const readingDelayMs = 1500 + Math.floor(Math.random() * 4000);
+        //   ★PC-1.1.8: TRANS-AM(buynow直撃)のみなら高速でも安全と判明したため短縮。
+        //     根拠: iOS実機ログが同ペース(読み~1秒)で丸1日・約2,518回 navigate して CAPTCHA 0。
+        //     CAPTCHA の真因は AOD/新規開始経路であって buynow直撃の頻度ではない、と特定済み。
+        //     0.7〜1.6秒 + navigate ~0.75-1.5秒 = 商品〜商品が約1.5〜3秒。ランダムは維持(人間っぽさ確保)。
+        //   ※過去の PC-1.1.3 は 1.5〜5.5秒。当時は AOD 経路が混在し CAPTCHA が出ていたための安全マージン。
+        const readingDelayMs = 700 + Math.floor(Math.random() * 900);
 
         // ★ 10% の確率で偽装サイクル (商品ページ経由) ★
         const useDecoyCycle = Math.random() < 0.10;
