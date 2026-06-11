@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.22 2026-06-11 21:39 #6205a8 JST
+// @version      v2.3.23 2026-06-11 21:46 #f64f1b JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1081,8 +1081,10 @@
         //   #buy が未描画なら最大この時間まで描画を待ってから判定(描画前リロード地獄を防ぐ)。
         render_wait_max_ms: 8000,
         // ★Phase 22 (2026-06-11): Akamai 防御強化(発売殺到時のブロック/ホーム弾き返し)検知時のクールダウン。
-        //   即リロードせずこの時間待ってピークをやり過ごす(ブロック長期化を防ぐ)。
-        akamai_cooldown_ms: 40000,
+        //   即リロードせずこの時間待ってから再確認(まだ弾かれていればまた待つ / 解けていれば即購入再開)。
+        //   ★HIROさん要望(6/11): ブロックが途中で解けても買い逃さないよう短め=15秒で「こまめに再確認」。
+        //   ハンマー連打ではない(15秒に1回)のでAkamaiを刺激せず、 かつ解除に速く追従する。 停止ではなく自動再開。
+        akamai_cooldown_ms: 15000,
       },
       keepalive: {
         enabled: false,
@@ -2288,8 +2290,8 @@
       if (_akBlock) {
         const _cd = (cfg.options || {}).akamai_cooldown_ms || 40000;
         pbError('warn','akamai-block',
-          `Akamai防御強化を検知(${_akBlock==='edge'?'エッジエラー画面':'ホーム弾き返し'}) → ${Math.round(_cd/1000)}秒クールダウン(殺到ピーク回避・即リロードしない)`);
-        updateUI({ status: `🛡 Akamai防御強化を検知\n${Math.round(_cd/1000)}秒待機して殺到ピークをやり過ごします` });
+          `Akamai防御強化を検知(${_akBlock==='edge'?'エッジエラー画面':'ホーム弾き返し'}) → ${Math.round(_cd/1000)}秒ごとに再確認(解けたら自動で購入再開・停止ではない)`);
+        updateUI({ status: `🛡 Akamai防御強化を検知\n${Math.round(_cd/1000)}秒ごとに再確認 → 解け次第 自動で購入再開` });
         if (await interruptibleSleep(_cd)) { updateUI(); return; }   // 停止押下で即中断
         if (loadState().paused === true) { updateUI(); return; }
         await safeReload('akamai-cooldown');
@@ -3974,7 +3976,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.22 2026-06-11 21:39 #6205a8 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.23 2026-06-11 21:46 #f64f1b JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -5693,7 +5695,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.22 2026-06-11 21:39 #6205a8 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.23 2026-06-11 21:46 #f64f1b JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -5913,7 +5915,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.22 2026-06-11 21:39 #6205a8 JST');
+    lines.push('🔧 build: v2.3.23 2026-06-11 21:46 #f64f1b JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
