@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.24 2026-06-11 21:55 #1ef7b4 JST
+// @version      v2.3.26 2026-06-11 22:59 #306b5c JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -249,6 +249,18 @@
   //     render_wait_max_ms(既定8000ms)まで 200ms ポーリングで待つ。 出たら即抜け、 上限なら続行。
   //     ★#buy が在れば(grey でも)待たない → 発売時の青検知の速さ・攻め戦略は不変。
   //     ※ [V]自己修復 と [W]描画待ち は p-bandai の「読込後DOM丸ごと再描画」 という同一原因の両輪。
+  //
+  // [X] Phase 25 (2026-06-11 HIROさん要望2件):
+  //     (1) 軽量ポーリング廃止 → 監視を「実リロード+描画待ち([W])」に一本化。 ★デフォルト変更だが死コード排除のため例外★
+  //         理由: p-bandai 全面SPA化で refreshBuyButton の fetch が空シェルしか取れず #buy が無い → 毎回
+  //               refresh-failed リロードに落ちていた(実機ログ 223625: refresh-failed 183回 = 無駄fetch+リロード)。
+  //               軽量ポーリングは機能しておらず、リロード頻度は実質 旧方式と同じ。 無駄fetch だけ消す。
+  //         実装: loadConfig() で lightweight_polling を常に false に強制(保存済み true も上書き)+ default も false。
+  //               UIトグルは disabled + 「無効・廃止」表示に。 refreshBuyButton/pollViaIframe は呼ばれず死コード化(削除はしない=安全)。
+  //         ★連打10回は不変(RETRY_LIMIT は cartHasOther=false のため MAX_RETRY_PER_CYCLE=10 のまま)。
+  //     (2) FAB がサイト側モーダル(「注文できる商品がございません」等)に覆われて見えなくなる事象を修復。
+  //         ensureFloatingUI: FAB中心の最前面要素が FAB(orその子)でなければ覆われている → body末尾へ再append +
+  //         z-index 2147483647 で最前面へ復帰(z-index値に依存せず確実)。 700ms 自己修復タイマーで自動。
   //
   // 過去の事故ログは HISTORY.md、 設計詳細は CLAUDE.md を参照。
   // 動いている仕組みを壊さないための鉄則:
@@ -703,6 +715,7 @@
     'phase16',                     // ★Phase 16 本物ボタン+小窓待ち (実験の核心計測)
     'foreground',                  // ★Phase 17 表示中タブのみ稼働 (裏タブ停止/再開)
     'ui-heal',                     // ★Phase 18 FAB自己修復 (DOM差し替えで消えたFABの再注入)
+    'ui-front',                    // ★Phase 25 FAB最前面復帰 (サイトモーダルに覆われたFABを前面へ)
     'render',                      // ★Phase 19 遅延描画待ち (白いシェル→商品描画の待機計測)
     'akamai-block',                // ★Phase 22 Akamai防御強化検知→クールダウン
   ]);
@@ -1044,7 +1057,7 @@
         periodic_cleanup_enabled: true,    // 定期キャッシュクリア(アクセス制限予防)
         periodic_cleanup_minutes: 10,      // 何分ごと
         low_power_mode: false,             // ★古いiPhone(13Pro/11Pro等)向け低負荷モード
-        lightweight_polling: true,         // ★軽量ポーリング: ON=画面据え置き(新方式) / OFF=実リロード(旧方式)
+        lightweight_polling: false,        // ★Phase 25 (2026-06-11): SPA化で軽量ポーリングは死亡(fetchが空シェルを返し #buy が取れず常に refresh-failed リロードに落ちる)。実リロード+描画待ち監視に一本化。loadConfig で常に false に強制(下記参照)。
         new_release_only_mode: false,      // ★新発売狙いモード: ON時 release_time あり商品のみ監視 / OFF時 再販品も監視(デフォルト OFF: HIROさんは再販品も欲しい)
         new_release_grace_minutes: 30,     // 発売時刻から N分経過したら自動停止(モード ON 時のみ)
         // ★Phase 9-7: 発売後 N 分は警戒モード(連打 3 回 + リロード 5〜10 秒)。 0=無効
@@ -1105,7 +1118,9 @@
       const def = defaultConfig();
       return {
         ...def, ...c,
-        options: { ...def.options, ...(c.options || {}) },
+        // ★Phase 25 (2026-06-11): 軽量ポーリングは SPA化で死亡 → 保存済みで true でも常に false に強制。
+        //   監視は「実リロード+描画待ち(Phase 19)」に一本化。無駄fetch/refresh-failed churn を排除。
+        options: { ...def.options, ...(c.options || {}), lightweight_polling: false },
         keepalive: { ...def.keepalive, ...(c.keepalive || {}) },
         notify: { ...def.notify, ...(c.notify || {}) },
         products: Array.isArray(c.products) ? c.products : [],
@@ -3991,7 +4006,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.24 2026-06-11 21:55 #1ef7b4 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.26 2026-06-11 22:59 #306b5c JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -4133,7 +4148,30 @@
   function ensureFloatingUI() {
     try {
       if (!document.body) return;
-      if (document.getElementById('pb-fab')) return;   // FAB 健在 → 何もしない
+      const _fab = document.getElementById('pb-fab');
+      if (_fab) {
+        // ★Phase 25 (2026-06-11): FAB は健在だが、サイト側モーダル(「注文できる商品がございません」等)に
+        //   覆われてモニターが見えなくなる事象に対応(HIROさん報告: ポップアップ表示中にツールが見えない)。
+        //   FAB中心点の最前面要素が FAB 自身(or その子)でなければ覆われている →
+        //   body 末尾へ再append + z-index 最大化で最前面へ復帰。z-index 値に依存せず確実。
+        try {
+          const _r = _fab.getBoundingClientRect();
+          if (_r.width > 0 && _r.height > 0) {
+            const _topEl = document.elementFromPoint(_r.left + _r.width / 2, _r.top + _r.height / 2);
+            if (_topEl && _topEl.id !== 'pb-fab' && !_fab.contains(_topEl)) {
+              _fab.style.zIndex = '2147483647';
+              document.body.appendChild(_fab);   // DOM 末尾 = 同z-indexでも最前面に来る
+              if (!window._pbFabCovered) {
+                window._pbFabCovered = true;
+                pbLog('🔝','ui-front','FABがサイトのモーダルに覆われた → 最前面へ復帰');
+              }
+            } else {
+              window._pbFabCovered = false;
+            }
+          }
+        } catch (_) {}
+        return;   // FAB 健在 → 上記の最前面チェックのみで終了
+      }
       // FAB が消えた = ページが DOM を差し替えた → 再注入
       _uiInjected = false;
       injectFloatingUI();
@@ -4436,22 +4474,20 @@
             <summary style="cursor:pointer;padding:8px 10px;background:linear-gradient(180deg,#2a1808,#1a0808);border:1px solid #8a4f2c;border-radius:6px;color:#ffcc88;font-size:12px;font-weight:bold;">⚠ 触らない方が良い詳細設定(★絶対デフォルト)</summary>
             <div style="padding:10px;background:linear-gradient(180deg,#0d2614,#0a1808);border:1px solid #2a9c4d;border-radius:6px;margin-top:6px;">
               <div style="font-size:11px;color:#ffcc88;margin-bottom:8px;line-height:1.5;">
-                ⚠ 過去の事故で確定したデフォルト設定。 OFF にすると Safari 白画面が再発する可能性があります。
+                ⚠ 監視方式は「実リロード+描画待ち」に固定です(下記)。
               </div>
-              <label style="display:block;">
-                <input type="checkbox" id="pb-lightweight-polling">
-                <strong style="color:#5fd47f;font-size:14px;">🔍 軽量ポーリング(新方式・推奨)</strong>
+              <label style="display:block;opacity:0.5;">
+                <input type="checkbox" id="pb-lightweight-polling" disabled>
+                <strong style="color:#9a9a9a;font-size:14px;">🔍 軽量ポーリング(現在は無効・廃止)</strong>
               </label>
-              <div style="font-size:11px;color:#9fff9f;margin:6px 0 0 24px;line-height:1.6;">
-                <strong>ON(推奨)</strong>:<br>
-                ・在庫切れ中も画面リロードしない(<b>Safari白画面ナシ・発熱ナシ</b>)<br>
-                ・fetch でHTMLだけ取得してボタン状態を裏で監視<br>
-                ・青になった瞬間に検知 → 連打10回 fetch POST で確保<br>
-                ・<b>HTTP通信量1/10〜1/30</b> = アクセス制限を食らいにくい<br><br>
-                <strong>OFF(旧式・互換用)</strong>:<br>
-                ・グレー検知のたびに実ページリロード(従来動作)<br>
-                ・サイト本来のJSフロー全体を毎回再実行<br>
-                ・実績ある安定動作だが Safari セーフガードのリスク
+              <div style="font-size:11px;color:#bdbd9f;margin:6px 0 0 24px;line-height:1.6;">
+                <strong>2026-06 にプレバンが全面SPA化</strong>したため、fetch でHTMLだけ取得しても<br>
+                ボタン(#buy)がJSで後から描画される=空シェルしか取れず<b>軽量ポーリングは機能しません</b>。<br>
+                毎回 refresh-failed リロードに落ちて<b>無駄fetch</b>になっていたため廃止しました。<br><br>
+                <strong>現在の監視(固定)= 実リロード + 描画待ち</strong>:<br>
+                ・グレー検知 → 実ページリロード<br>
+                ・読込後にボタンがJS描画されるのを待ってから(<b>白画面対策・Phase 19</b>)状態判定<br>
+                ・青になったら連打10回で確保(従来どおり)
               </div>
             </div>
           </details>
@@ -4517,14 +4553,12 @@
         <section>
           <h3>5. 動作の流れ(参考)</h3>
           <div style="font-size:11px;color:#b8a988;padding:8px;background:#0a0805;border-radius:4px;line-height:1.7;">
-            <strong>新方式(軽量ポーリング ON)</strong><br>
+            <strong>現在の監視(実リロード + 描画待ちに一本化)</strong><br>
             ① 商品ページを開く<br>
-            ② グレーなら → 250ms毎に fetch でHTML取得 → 画面据え置き<br>
-            ③ 青になったら → 連打10回 fetch POST(間隔100-220ms)<br>
-            ④ カート確保 → Discord通知 → 動作モードA なら停止<br><br>
-            <strong>旧方式(軽量ポーリング OFF)</strong><br>
-            ② グレーなら → 300ms後に実ページリロード(画面切替あり)<br>
-            ③ 以降は同じ
+            ② 読込後、ボタンがJS描画されるのを待つ(白画面対策・Phase 19)<br>
+            ③ グレーなら → 200ms後に実ページリロード → ②へ戻る<br>
+            ④ 青になったら → 連打10回で確保<br>
+            ⑤ カート確保 → Discord通知 → 動作モードA なら停止
           </div>
           <div style="font-size:11px;color:#ffcc88;margin-top:8px;padding:8px;background:#2a1808;border:1px solid #8a4f2c;border-radius:4px;line-height:1.6;">
             <strong>⚠ Safari「問題が繰り返し起きました」画面について</strong><br>
@@ -5710,7 +5744,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.24 2026-06-11 21:55 #1ef7b4 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.26 2026-06-11 22:59 #306b5c JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -5930,7 +5964,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.24 2026-06-11 21:55 #1ef7b4 JST');
+    lines.push('🔧 build: v2.3.26 2026-06-11 22:59 #306b5c JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
