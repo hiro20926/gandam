@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.20 2026-06-10 23:31 #a79ff9 JST
+// @version      v2.3.21 2026-06-11 21:25 #a30dd0 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1058,8 +1058,12 @@
         //   6/9 ログで判明: 同一ページ上の iframe 連打は 2発目以降ほぼ全部 /error/4/(bot拒否)。
         //   HIROさんの手動フロー(押す→小窓を確認→次を押す)を再現するため、 2発目以降は実ボタンを click し
         //   サイト本来の小窓(モーダル)が出るのを待って判定する。 1発目は従来 iframe のまま(無変更)。
-        //   ★既定 false (本番安全側 — 未検証の購入核心変更のため)。 ⚙設定「🧪」で ON にして実験。
-        realbutton_retry: false,
+        //   ★Phase 21 (2026-06-11): 既定 true に変更。 p-bandai SPA 化で旧 iframe 投入は空シェル/error4 で死亡
+        //     → 全押下を本物ボタン+小窓確認の人間フローに統一(押す→小窓→閉じる→0.5秒→次、 成功小窓で即停止)。
+        //     false で旧 iframe 方式にフォールバック可(ただし現状の p-bandai では機能しない)。
+        realbutton_retry: true,
+        // ★Phase 21: 本物ボタン反応駆動の押下間隔(小窓を閉じ切った後にあける人間間隔)。 HIROさん指定 0.5秒。
+        realbtn_press_gap_ms: 500,
         // 小窓が出るまで待つ上限(=死んだページ救出のみ)。 遅いだけの応答はこの範囲で待ち切る。
         //   90秒 完全沈黙 = "遅い"ではなく"壊れている" と判断してリロード (HIROさん指定)。
         realbutton_popup_wait_ms: 90000,
@@ -1538,10 +1542,15 @@
   }
 
   // 「カートに商品が追加されました」成功ポップアップを検知 → 成功シグナル
+  // ★成功判定の文言。 ★Phase 21 (2026-06-11): 「在庫不足で個数を減らして入った」 も成功に追加。
+  //   実発売で「商品在庫がご希望個数に不足したため商品数変更が出来ない商品が御座いました。カートページにて
+  //   ご確認下さい。」 が出た = ★商品はカートに入っている★(希望個数より少ないだけ)。 これを成功と認識せず
+  //   連打を続けて取りこぼしていた(HIROさん 6/11 指摘)。
+  const CART_ADDED_RE = /カートに商品が追加されました|カートに追加しました|カートインしました|商品数変更が出来ない|個数に不足/;
   function detectCartAddedPopup() {
     if (!document.body) return false;
     const text = document.body.innerText || '';
-    return /カートに商品が追加されました|カートに追加しました|カートインしました/.test(text);
+    return CART_ADDED_RE.test(text);
   }
 
   // ポップアップを自動で閉じる
@@ -1910,18 +1919,13 @@
     const total = Date.now() - t0;
     const timings = { post: total, body: 0, decode: 0, cartFetch: 0, total: total };
     if (outcome === 'added') {
-      // 自分の商品が本当に入ったか order 照合(keepalive 等の並行追加の誤検知を防ぐ)
-      const recheck = await getCartItemIds();
-      const ids = recheck.ids || [];
-      const newIds = ids.filter((x) => !beforeIds.includes(x));
+      // ★Phase 21 (2026-06-11): 成功小窓(カート追加/在庫不足で入った/ALREADY_IN_CART)が出た時点で
+      //   カート確保は確定。 getCartItemIds(p-bandai SPA 化で /cart/ も JS 描画 → 件数取得不能)に頼って
+      //   照合すると成功が UNCONFIRMED に落ち、 取りこぼして連打を続けていた。 小窓そのものを確証として SUCCESS。
       const cf = findCartFormOnPage();
       const oi = cf ? cf.querySelector('input[name="order"]') : null;
-      const expected = oi ? oi.value : null;
-      if (expected && newIds.includes(expected)) {
-        return { result: 'SUCCESS', newOrderIds: newIds, afterIds: ids, timings, detail: `realbtn-added(待ち${total}ms)` };
-      }
-      try { dismissAnyPopup(); } catch (_) {}
-      return { result: 'UNCONFIRMED', afterIds: (ids.length ? ids : beforeIds), timings, detail: `realbtn-added-no-match(待ち${total}ms)` };
+      const oid = oi ? oi.value : null;
+      return { result: 'SUCCESS', newOrderIds: oid ? [oid] : [], afterIds: beforeIds, timings, detail: `realbtn-added(待ち${total}ms)` };
     }
     if (outcome === 'error') {
       try { dismissAnyPopup(); } catch (_) {}
@@ -2786,8 +2790,9 @@
           : `🛒 カート投入 ${i+1}/${RETRY_LIMIT}`
       });
       // ★試行1回ごとにログ
-      // ★Phase 16 (実験): 1発目は従来 iframe(無変更)、 2発目以降は本物ボタン+小窓待ち
-      const _useRealBtn = realButtonMode && i >= 1;
+      // ★Phase 21 (2026-06-11): 全押下を本物ボタン+小窓待ちに統一(1発目の iframe は SPA 化で空シェル39字/
+      //   error4 になり死んでいる + bot判定の元 → 廃止)。 realbutton_retry=false の時のみ旧 iframe にフォールバック。
+      const _useRealBtn = realButtonMode;
       pbLog('🛒','attempt',`カート投入 ${i+1}/${RETRY_LIMIT} ${_useRealBtn ? '本物ボタンclick' : 'POST送信'}`);
       // ★ログ整理: 個別試行ログは省略(連打終了時の集計のみ記録)
       // ★knownCartIds を渡して before fetch をスキップ(試行毎の fetch 1回減)
@@ -2934,15 +2939,35 @@
       //          - true (サーバが反応した): 50-150ms (タップ物理時間) → 次の POST
       //          - false (反応なし、 /error/4/ 等): 200-500ms ランダム → 次の POST
       //          機械的固定 100-220ms は廃止、 サーバの反応有無に応じて動的に変える
-      try { dismissAnyPopup(); } catch (_) {}
-      const _hadPopup = !!(r && r.hadPopupMarker);
-      const _waitMs = _hadPopup ? (50 + Math.random() * 100) : (200 + Math.random() * 300);
-      await sleep(_waitMs);
-      // paused 確認 (連打中の停止ボタンに応答)
-      if (loadState().paused === true) { updateUI(); return; }
-      // 観測ログ: 反応駆動の挙動を CSV で追跡 (5 回ごとに残す)
-      if (i === 0 || (i + 1) % 5 === 0) {
-        pbLog('🔁','attempt',`reaction-driven popup=${_hadPopup?'yes':'no'} wait=${Math.round(_waitMs)}ms (i=${i+1}/${RETRY_LIMIT})`);
+      // ★Phase 21 (2026-06-11): 押下間隔は「小窓を閉じ切ってから人間間隔(既定0.5秒)」。
+      //   HIROさん指摘「popアップの表示時間と消す時間を考慮しろ、 押すだけではダメ」を反映 —
+      //   閉じる → 消えたのを確認(消す時間) → 0.5秒(人間間隔) を1サイクルに含める(タイマー盲打ちにしない)。
+      if (_useRealBtn) {
+        const _ERR = /大変混み合っているため|在庫がございません|追加できません|エラーが発生/;
+        const _dm0 = Date.now();
+        while (Date.now() - _dm0 < 1500) {            // 小窓が消えるまで確認(消す時間を考慮)
+          try { dismissAnyPopup(); } catch (_) {}
+          const _bt = (document.body && document.body.innerText) || '';
+          if (!_ERR.test(_bt)) break;
+          await sleep(120);
+        }
+        if (loadState().paused === true) { updateUI(); return; }
+        const _gap = (cfg.options || {}).realbtn_press_gap_ms || 500;
+        await sleep(_gap);                            // 人間らしい間隔(0.5秒)
+        if (loadState().paused === true) { updateUI(); return; }
+        if (i === 0 || (i + 1) % 3 === 0) {
+          pbLog('🔁','attempt',`本物ボタン反応駆動: 小窓閉じ+${_gap}ms間隔 → 次押下 (${i+1}/${RETRY_LIMIT})`);
+        }
+      } else {
+        // 旧 iframe 方式の反応駆動 wait(realbutton_retry=false のフォールバック時のみ)
+        try { dismissAnyPopup(); } catch (_) {}
+        const _hadPopup = !!(r && r.hadPopupMarker);
+        const _waitMs = _hadPopup ? (50 + Math.random() * 100) : (200 + Math.random() * 300);
+        await sleep(_waitMs);
+        if (loadState().paused === true) { updateUI(); return; }
+        if (i === 0 || (i + 1) % 5 === 0) {
+          pbLog('🔁','attempt',`reaction-driven popup=${_hadPopup?'yes':'no'} wait=${Math.round(_waitMs)}ms (i=${i+1}/${RETRY_LIMIT})`);
+        }
       }
     }
 
@@ -3900,7 +3925,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.20 2026-06-10 23:31 #a79ff9 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.21 2026-06-11 21:25 #a30dd0 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -5261,6 +5286,7 @@
         ? modal.querySelector('#pb-realbutton-retry').checked
         : (_prevOpts.realbutton_retry !== false)),
       realbutton_popup_wait_ms: _prevOpts.realbutton_popup_wait_ms || 90000,
+      realbtn_press_gap_ms: _prevOpts.realbtn_press_gap_ms || 500,
       // ★Phase 17: 表示中タブのみ稼働。 チェックボックスで切替、 無ければ既存値維持
       foreground_only: (modal.querySelector('#pb-foreground-only')
         ? modal.querySelector('#pb-foreground-only').checked
@@ -5618,7 +5644,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.20 2026-06-10 23:31 #a79ff9 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.21 2026-06-11 21:25 #a30dd0 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -5838,7 +5864,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.20 2026-06-10 23:31 #a79ff9 JST');
+    lines.push('🔧 build: v2.3.21 2026-06-11 21:25 #a30dd0 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
