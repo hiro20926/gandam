@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.1.8
+// @version      1.1.9
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.1.8';
+    const SCRIPT_VERSION = 'PC-1.1.9';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -14406,12 +14406,31 @@
         const transAmUrl = asin ? getSavedTransAmUrl(asin) : null;
 
         // ★ 人間っぽい "在庫切れ画面を読む時間" ★
-        //   ★PC-1.1.8: TRANS-AM(buynow直撃)のみなら高速でも安全と判明したため短縮。
-        //     根拠: iOS実機ログが同ペース(読み~1秒)で丸1日・約2,518回 navigate して CAPTCHA 0。
-        //     CAPTCHA の真因は AOD/新規開始経路であって buynow直撃の頻度ではない、と特定済み。
-        //     0.7〜1.6秒 + navigate ~0.75-1.5秒 = 商品〜商品が約1.5〜3秒。ランダムは維持(人間っぽさ確保)。
-        //   ※過去の PC-1.1.3 は 1.5〜5.5秒。当時は AOD 経路が混在し CAPTCHA が出ていたための安全マージン。
-        const readingDelayMs = 700 + Math.floor(Math.random() * 900);
+        //   ★PC-1.1.9: 次に踏む経路で速度を可変(HIRO要望)。
+        //     ・次が TRANS-AM直撃(buynow)        → 0.7〜1.6秒(高速)。iOS実機が同ペースで丸1日CAPTCHA0で実証済み。
+        //     ・次が 新規開始/AOD(URL未登録商品)  → 1.5〜5.5秒(元の安全マージン)。CAPTCHAの真因はこの経路。
+        //   先読みは「読み取りのみ」: ROT_IDX は進めず、rotateNextUrl と同じ計算で"次の商品"を予測するだけ。
+        //   実際の遷移・購入フローは従来通り(無変更)。
+        const nextIsTransAm = (function () {
+            try {
+                if (isRotationOn()) {
+                    const _list = getRotationList();
+                    if (_list && _list.length >= 2) {
+                        let _idx = -1;
+                        const _cur = (typeof extractAsin === 'function') ? (extractAsin(location.pathname) || '') : '';
+                        if (_cur) _idx = _list.findIndex(function (p) { return p.asin === _cur; });
+                        if (_idx < 0) _idx = parseInt(localStorage.getItem(ROT_IDX_KEY) || '0', 10) || 0;
+                        const _next = _list[(_idx + 1) % _list.length];
+                        return !!(_next && _next.asin && hasSavedTransAmUrl(_next.asin));
+                    }
+                }
+            } catch (e) {}
+            // 巡回OFF / 1商品ループ: この商品の TRANS-AM URL があれば直撃=高速、無ければ新規開始=低速
+            return !!transAmUrl;
+        })();
+        const readingDelayMs = nextIsTransAm
+            ? (700  + Math.floor(Math.random() * 900))    // 0.7〜1.6秒  TRANS-AM直撃: 高速
+            : (1500 + Math.floor(Math.random() * 4000));  // 1.5〜5.5秒  新規開始/AOD: 元の安全マージン
 
         // ★ 10% の確率で偽装サイクル (商品ページ経由) ★
         const useDecoyCycle = Math.random() < 0.10;
@@ -14425,6 +14444,7 @@
                     fromUrl: location.href.slice(0, 200),
                     earlyDetected: earlyStockOut,
                     readingDelayMs: readingDelayMs,
+                    nextIsTransAm: nextIsTransAm,
                     useDecoyCycle: useDecoyCycle,
                     hasTransAmUrl: !!transAmUrl,
                 });
