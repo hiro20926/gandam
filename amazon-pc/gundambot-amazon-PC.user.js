@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.2.2
+// @version      1.2.3
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.2.2';
+    const SCRIPT_VERSION = 'PC-1.2.3';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -14299,6 +14299,8 @@
         let earlyStockOut = false;
         let qtyUpdateDetected = false;
         let dog404Detected = false;
+        let amazonErrorDetected = false;   // ★PC-1.2.3: 「ご迷惑をおかけしています」等のエラー画面(503/500)
+        let _errBackoffMs = 0;             //   検出時のバックオフ待機(連発でエスカレート)
         const stockOutStartTs = Date.now();
         try {
             const earlyExit = () => S.shouldHalt();
@@ -14353,6 +14355,20 @@
                     } catch (e) {}
                     return null;
                 })()),
+                // ⑧ ★PC-1.2.3★ Amazon エラー画面「ご迷惑をおかけしています」(503/500) → 即検出
+                //   buynow URL に出るため従来は STOCK_OUT_BUYNOW 扱い → 在庫切れ要素を探して 5 秒
+                //   タイムアウトまで待っていた(=「復帰が長い」)。文字で即検出して無駄待ちを無くす。
+                racable('errorPage', (async () => {
+                    const hasErr = () => {
+                        try {
+                            const b = (document.body && document.body.innerText) || '';
+                            return /ご迷惑をおかけしています|現在サーバーが混み合って|Service Unavailable/.test(b);
+                        } catch (e) { return false; }
+                    };
+                    if (hasErr()) return 'amazon-error-immediate';
+                    const t = await waitForText(/ご迷惑をおかけしています|現在サーバーが混み合って|Service Unavailable/, 5000, { earlyExitFn: earlyExit });
+                    return t ? 'amazon-error-text' : null;
+                })()),
                 // ⑦ タイムアウト 5 秒
                 new Promise((resolve) => setTimeout(() => resolve({ label: 'timeout', value: null }), 5000)),
             ]);
@@ -14387,6 +14403,24 @@
                     `犬画面 (404) 検出 (${detectedAtMs}ms 後 / hit=${result.value}) → リストック前扱い、商品ページに戻ってループ継続`, {
                     detectedAtMs: detectedAtMs,
                     matchType: result.value,
+                }); } catch (e) {}
+            } else if (hitLabel === 'errorPage') {
+                // ★PC-1.2.3: Amazon エラー画面 (503/500) を即検出 → 5秒タイムアウトの無駄待ちを回避。
+                //   503=「混んでて捌けない」なので連打しない。連発するほど待機を延ばす(2.5→5→10秒)。
+                amazonErrorDetected = true;
+                let _streak = 1;
+                try {
+                    const _lastTs = parseInt(localStorage.getItem('LB_AM_ERR_LAST_TS') || '0', 10) || 0;
+                    const _prev = parseInt(localStorage.getItem('LB_AM_ERR_STREAK') || '0', 10) || 0;
+                    _streak = (_lastTs > 0 && (Date.now() - _lastTs) < 60000) ? _prev + 1 : 1;
+                    localStorage.setItem('LB_AM_ERR_STREAK', String(_streak));
+                    localStorage.setItem('LB_AM_ERR_LAST_TS', String(Date.now()));
+                } catch (e) {}
+                _errBackoffMs = _streak <= 1 ? 2500 : (_streak === 2 ? 5000 : 10000);
+                try { logAm('warn', 'amazon-error-buynow',
+                    `「ご迷惑」エラー画面検出 (${detectedAtMs}ms 後 / ${result.value}) → ${_errBackoffMs}ms 待機して復帰 (連続${_streak}回目)`, {
+                    detectedAtMs: detectedAtMs, streak: _streak, backoffMs: _errBackoffMs,
+                    fromUrl: location.href.slice(0, 200),
                 }); } catch (e) {}
             } else {
                 // タイムアウト → どちらも見つからず (Amazon 重い時など)
@@ -14504,9 +14538,13 @@
             // 巡回OFF / 1商品ループ: この商品の TRANS-AM URL があれば直撃=高速、無ければ新規開始=低速
             return !!transAmUrl;
         })();
-        const readingDelayMs = nextIsTransAm
+        let readingDelayMs = nextIsTransAm
             ? (700  + Math.floor(Math.random() * 900))    // 0.7〜1.6秒  TRANS-AM直撃: 高速
             : (1500 + Math.floor(Math.random() * 4000));  // 1.5〜5.5秒  新規開始/AOD: 元の安全マージン
+        // ★PC-1.2.3: エラー画面検出時はバックオフ待機に差し替え(503を連打しない)。
+        //   通常サイクル(エラー無し)では連続カウンタをリセット。
+        if (amazonErrorDetected) { readingDelayMs = _errBackoffMs; }
+        else { try { localStorage.removeItem('LB_AM_ERR_STREAK'); } catch (e) {} }
 
         // ★ 10% の確率で偽装サイクル (商品ページ経由) ★
         const useDecoyCycle = Math.random() < 0.10;
