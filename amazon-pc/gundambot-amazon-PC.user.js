@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.2.3
+// @version      1.2.4
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.2.3';
+    const SCRIPT_VERSION = 'PC-1.2.4';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -14846,6 +14846,49 @@
                 try { S.opFullStop(); } catch (e) {}
                 try { toast('⛔ CAPTCHA(画像認証)が出ました\n→ 停止しました。手動で解いてから再開してください', STOP_RED, 60000); } catch (e) {}
                 return;
+            }
+        } catch (e) {}
+
+        // ★PC-1.2.4: ストール自動復帰ウォッチドッグ
+        //   ページが開いた(document-start)のに 18 秒進展がなければ(=白い画面/固着)、
+        //   読み込みを中断して監視ループに自動で戻る(手動操作・パネル不要)。
+        //   通常フローは数秒で navigate→ページ unload→このタイマーも消えるので、
+        //   18 秒残って発火した = 本当に固着、と判定できる。
+        //   ※購入中(CHECKOUT/完了/place-order/確定click後)は絶対に発火しない(注文を壊さない)。
+        //   ※CAPTCHA は上のガードで既に停止済みなので、ここには来ない。
+        try {
+            if (S.getMode && S.getMode() === MODE_RUNNING) {
+                setTimeout(function () {
+                    try {
+                        if (!S.getMode || S.getMode() !== MODE_RUNNING) return;   // 停止/一時停止中は触らない
+                        if (S.shouldHalt && S.shouldHalt()) return;
+                        let scr = 'OTHER';
+                        try { scr = detectScreen(); } catch (e) {}
+                        if (scr === 'CHECKOUT' || scr === 'COMPLETE') return;     // 購入中/完了は触らない
+                        const _p = location.pathname || '';
+                        if (/\/spc\/|place-order|thankyou/.test(_p)) return;      // 確定/決済/完了URLは触らない
+                        const _step = (function () { try { return S.getStep(); } catch (e) { return ''; } })();
+                        if (_step === STEP_ORDER_PLACED) return;                  // 確定click後は触らない
+                        // 監視系ページで18秒固着 = ストール → 自動復帰
+                        try { logAm('warn', 'stall-watchdog',
+                            '⏱ 18秒進展なし(白い画面/固着)→ 読み込み中断して監視ループに自動復帰', {
+                            screen: scr, url: location.href.slice(0, 150) }); } catch (e) {}
+                        try { window.stop(); } catch (e) {}
+                        let _u = '';
+                        try { if (typeof rotateNextUrl === 'function') _u = rotateNextUrl() || ''; } catch (e) {}
+                        if (!_u) { try { const _s = S.getSession(); if (_s && _s.productUrl) _u = _s.productUrl; } catch (e) {} }
+                        if (_u) {
+                            try {
+                                const _url = new URL(_u);
+                                _url.searchParams.set('_pageRefresh', String(Date.now()));
+                                _url.searchParams.set('_sw', String(Date.now()));
+                                location.href = _url.toString();
+                            } catch (e) { try { location.href = _u; } catch (e2) { try { location.reload(); } catch (e3) {} } }
+                        } else {
+                            try { location.reload(); } catch (e) {}
+                        }
+                    } catch (e) {}
+                }, 18000);
             }
         } catch (e) {}
 
