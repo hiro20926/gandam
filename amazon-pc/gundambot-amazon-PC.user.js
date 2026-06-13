@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.2.0
+// @version      1.2.1
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.2.0';
+    const SCRIPT_VERSION = 'PC-1.2.1';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -13437,6 +13437,12 @@
         let verifiedDirectAt = 0;
         try { verifiedDirectAt = parseInt(localStorage.getItem('LB_AM_VERIFIED_DIRECT') || '0', 10); } catch (e) {}
         const verifiedRecent = verifiedDirectAt > 0 && (Date.now() - verifiedDirectAt) < 5 * 60 * 1000;
+        // ★PC-1.2.1: TRANS-AM(b方式)は保存済み offerListing.1 = Amazon直販Buy Boxの「今すぐ買う」由来。
+        //   turbo の SPC 確定画面は「販売元 Amazon.co.jp」「Amazon発送」表示が出ない構造のことがあり、
+        //   verifyCheckoutSafety が直販を確認できず false negative になる(HIRO報告: B09Q6GH9HN の直販
+        //   リストックを取り逃した実例)。TRANS-AM中は販売元/発送テキスト欠落のみ救済する。
+        //   ※マケプレが【積極検出】(noNonAmazonSeller=false)された場合は上の分岐で必ず拒否されるので安全。
+        const isTransAmTrust = (function(){ try { return S.isTransAmMode(); } catch (e) { return false; } })();
 
         if (!verify.ok) {
             const isMarketplaceSeller = !!(verify.checks && verify.checks.noNonAmazonSeller === false);
@@ -13485,18 +13491,28 @@
                 clearState(); setStopped(true); return false;
             }
 
-            // マケプレでない failsafe NG → 既存の verifiedRecent ロジック
+            // マケプレでない failsafe NG → verifiedRecent / TRANS-AM直販信頼 で続行判定
+            //   transAmDirectTrust: TRANS-AM中 かつ 単品 かつ 価格内 なら、販売元/発送テキスト欠落を救済。
+            //   (ここに来た時点で noNonAmazonSeller=true 確定=マケプレは上の分岐で除外済み)
+            const transAmDirectTrust = isTransAmTrust && verify.checks.singleItem && verify.checks.withinMaxPrice;
+            const trustDirect = verifiedRecent || transAmDirectTrust;
             toast(
                 `⚠️ failsafe NG: ${contextLabel}\n` +
                 verify.issues.slice(0, 4).map(i => `・${i}`).join('\n') +
-                (verifiedRecent ? '\n→ 商品ページで直販確認済 → 続行' : '\n→ 直販未確認 → 停止'),
-                verifiedRecent ? '#f57c00' : STOP_RED,
-                verifiedRecent ? 6000 : 15000
+                (trustDirect
+                    ? (transAmDirectTrust ? '\n→ TRANS-AM保存offer=直販とみなし続行' : '\n→ 商品ページで直販確認済 → 続行')
+                    : '\n→ 直販未確認 → 停止'),
+                trustDirect ? '#f57c00' : STOP_RED,
+                trustDirect ? 6000 : 15000
             );
-            if (!verifiedRecent) {
+            if (!trustDirect) {
                 recoverToMonitorLoop('failsafe NG（直販未確認）'); return false;
             }
-            // verifiedRecent=true && マケプレでない → 続行
+            try { logAm('info', 'order-confirm', transAmDirectTrust
+                ? '✓ failsafe NG だが TRANS-AM保存offer=直販とみなし続行 (SPC販売元表示欠落の救済)'
+                : '✓ failsafe NG だが商品ページ直販確認済とみなし続行',
+                { context: contextLabel, issues: verify.issues }); } catch (e) {}
+            // trustDirect=true && マケプレでない → 続行
         }
 
         const placeBtn = findPlaceOrderButton(rootEl);
