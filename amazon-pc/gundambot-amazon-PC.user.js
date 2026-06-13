@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.2.1
+// @version      1.2.2
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.2.1';
+    const SCRIPT_VERSION = 'PC-1.2.2';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -12168,6 +12168,34 @@
         //   修正:   screen チェックを先に → 非商品ページなら **セッション作らず即 return**
         const _screenPre = detectScreen();
         if (_screenPre !== 'PRODUCT' && _screenPre !== 'PRODUCT_AOD') {
+            // ★PC-1.2.2: 巡回ON なら、非商品ページでも「監視対象の先頭商品へ自動遷移して開始」(HIRO要望)。
+            //   商品ページまで手動で戻る手間をなくす。TRANS-AM URL があれば buynow 直撃で開始、
+            //   無ければ /dp 商品ページで開始。以降の巡回は従来どおり rotateNextUrl が引き継ぐ。
+            if (isRotationOn()) {
+                const _list = getRotationList();
+                if (_list && _list.length > 0) {
+                    const _target = _list[0];
+                    try { localStorage.setItem(ROT_IDX_KEY, '0'); } catch (e) {}
+                    let _saved = '';
+                    try { if (hasSavedTransAmUrl(_target.asin)) _saved = getSavedTransAmUrl(_target.asin) || ''; } catch (e) {}
+                    let _go, _ta;
+                    if (_saved) { _go = _saved; _ta = true; }
+                    else {
+                        const _u = new URL('https://www.amazon.co.jp/dp/' + _target.asin);
+                        _u.searchParams.set('m', AMAZON_SELLER_ID);
+                        _u.searchParams.set('_pageRefresh', String(Date.now()));
+                        _u.searchParams.set('_sw', String(Date.now()));
+                        _go = _u.toString(); _ta = false;
+                    }
+                    if (_ta) S.opStartTransAm(_go); else S.opStart(_go);
+                    try { logAm('info', 'op',
+                        '🔄 巡回開始: 非商品ページ → 監視先頭商品へ自動遷移', {
+                            asin: _target.asin, transAm: _ta, total: _list.length }); } catch (e) {}
+                    toast('🔄 巡回開始 → 監視商品へ移動\n' + (_target.name || _target.asin), BUY_GREEN, 3000);
+                    setTimeout(() => { try { if (S.shouldHalt()) return; location.href = _go; } catch (e) {} }, 300);
+                    return;
+                }
+            }
             try { logAm('warn', 'op',
                 '🛒 開始 拒否: 非商品ページで押下 (セッション作成せず)', {
                     screen: _screenPre,
