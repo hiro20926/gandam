@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.2.5
+// @version      1.2.6
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.2.5';
+    const SCRIPT_VERSION = 'PC-1.2.6';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -5712,8 +5712,7 @@
                     '<button id="lb-am-log-close" style="padding:8px 12px;background:#d32f2f;color:#fff;border:0;border-radius:6px;font-size:13px;">✕ 閉じる</button>' +
                     '<button id="lb-am-log-discord-imp" style="padding:8px 12px;background:#5865f2;color:#fff;border:0;border-radius:6px;font-size:13px;">📨 重要のみ</button>' +
                     '<button id="lb-am-log-discord-all" style="padding:8px 12px;background:#3f51b5;color:#fff;border:0;border-radius:6px;font-size:13px;">📨 全件</button>' +
-                    '<button id="lb-am-log-csv" style="padding:8px 12px;background:#c41e9e;color:#fff;border:0;border-radius:6px;font-size:13px;font-weight:bold;">📥 直近CSV</button>' +
-                    '<button id="lb-am-log-csv-all" style="padding:8px 12px;background:#7b1fa2;color:#fff;border:0;border-radius:6px;font-size:13px;font-weight:bold;">📦 全履歴DL</button>' +
+                    '<button id="lb-am-log-csv" style="padding:8px 12px;background:#c41e9e;color:#fff;border:0;border-radius:6px;font-size:13px;font-weight:bold;">📥 CSV 保存</button>' +
                     '<button id="lb-am-log-copy" style="padding:8px 12px;background:#1976d2;color:#fff;border:0;border-radius:6px;font-size:13px;">📋 コピー</button>' +
                     '<button id="lb-am-log-clear" style="padding:8px 12px;background:#757575;color:#fff;border:0;border-radius:6px;font-size:13px;">🗑 クリア</button>' +
                     '</div>' +
@@ -5791,62 +5790,14 @@
                         toast('CSV 保存失敗: ' + (e && e.message ? e.message : e), STOP_RED, 5000);
                     }
                 });
-                // ★PC-1.2.5: 📦 全履歴DL — IndexedDB に貯めた数日ぶんの全ログを1ファイルでCSV出力
-                document.getElementById('lb-am-log-csv-all').addEventListener('click', () => {
-                    try {
-                        toast('📦 全履歴を集計中...', '#7b1fa2', 3000);
-                        idbGetAll((entries) => {
-                            try {
-                                const csvEscape = (v) => {
-                                    if (v === null || v === undefined) return '';
-                                    const s = String(v);
-                                    if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
-                                    return s;
-                                };
-                                entries.sort((a, b) => (a.tsms || 0) - (b.tsms || 0));
-                                const header = ['timestamp', 'perfMs', 'level', 'tag', 'message', 'data'].join(',');
-                                const rows = entries.map((e) => [
-                                    csvEscape(e.ts || ''),
-                                    csvEscape(e.perfMs !== undefined ? e.perfMs : ''),
-                                    csvEscape(e.level || ''),
-                                    csvEscape(e.category || ''),
-                                    csvEscape(e.message || ''),
-                                    csvEscape(e.detail || ''),
-                                ].join(','));
-                                const csvBody = '﻿' + header + '\n' + rows.join('\n');
-                                const blob = new Blob([csvBody], { type: 'text/csv;charset=utf-8' });
-                                const url = URL.createObjectURL(blob);
-                                const pad = (n) => String(n).padStart(2, '0');
-                                const now = new Date();
-                                const fname = 'gundambot-amazon-FULL-' +
-                                    now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + '-' +
-                                    pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds()) + '.csv';
-                                const a = document.createElement('a');
-                                a.href = url; a.download = fname; a.style.display = 'none';
-                                document.body.appendChild(a); a.click();
-                                setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} try { a.remove(); } catch (e) {} }, 1000);
-                                toast('📦 全履歴 ' + entries.length + '件を保存: ' + fname, BUY_GREEN, 5000);
-                            } catch (e) {
-                                toast('全履歴DL失敗: ' + (e && e.message ? e.message : e), STOP_RED, 5000);
-                            }
-                        });
-                    } catch (e) {
-                        toast('全履歴DL失敗: ' + (e && e.message ? e.message : e), STOP_RED, 5000);
-                    }
-                });
                 document.getElementById('lb-am-log-clear').addEventListener('click', () => {
-                    if (!confirm('ログを全消去しますか?\n(重要ログ・全履歴(IndexedDB)も含めて全削除)')) return;
+                    if (!confirm('ログを全消去しますか?\n(重要ログも含めて全削除)')) return;
                     LOG_BUFFER_AM.length = 0;
                     saveLogAm();
                     // ★v0.3.8.76: critical バッファも同時クリア
                     try {
                         LOG_BUFFER_AM_CRITICAL.length = 0;
                         saveLogAmCritical();
-                    } catch (e) {}
-                    // ★PC-1.2.5: IndexedDB の全履歴もクリア
-                    try {
-                        _idbQueue = [];
-                        if (_idb) _idb.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).clear();
                     } catch (e) {}
                     document.getElementById('lb-am-log-content').textContent = '(クリア済み)';
                 });
@@ -6285,63 +6236,7 @@
     };
     // ★PC版: ログが LOG_MAX_AM で溢れる前に、自動で CSV ダウンロードして保全する
     //   (userscript は任意フォルダへ直書き不可。Chrome のダウンロード先を Desktop\amazon に固定して運用)
-    // ★PC-1.2.5: ログ全履歴を IndexedDB(大容量・localStorageとは別領域)に蓄積。
-    //   ・自動ダウンロードは廃止 → ファイルが勝手に増えない(HIRO要望「手動だけ」)
-    //   ・手動で「全履歴DL」を押すと、数日ぶんの全ログを1ファイルでCSV出力できる
-    //   ・localStorage(商品リスト等)を圧迫しない=過去のquota問題は起きない
-    //   ・古いものは自動間引き(7日保持)
-    const IDB_NAME = 'gbot_am_logs', IDB_STORE = 'logs';
-    const IDB_KEEP_MS = 7 * 24 * 3600 * 1000;   // 7日分を保持
-    let _idb = null, _idbReady = false, _idbQueue = [], _idbFlushTimer = null;
-    const _idbFlush = () => {
-        _idbFlushTimer = null;
-        if (!_idb || !_idbQueue.length) return;
-        try {
-            const batch = _idbQueue; _idbQueue = [];
-            const os = _idb.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE);
-            for (const r of batch) { try { os.add(r); } catch (e) {} }
-        } catch (e) {}
-    };
-    const _idbPrune = () => {
-        try {
-            if (!_idb) return;
-            const idx = _idb.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).index('tsms');
-            const req = idx.openCursor(IDBKeyRange.upperBound(Date.now() - IDB_KEEP_MS));
-            req.onsuccess = (e) => { const c = e.target.result; if (c) { try { c.delete(); } catch (er) {} c.continue(); } };
-        } catch (e) {}
-    };
-    const idbAppend = (entry) => {
-        try {
-            _idbQueue.push({ tsms: Date.now(), ts: entry.ts, perfMs: entry.perfMs, level: entry.level,
-                category: entry.category, message: entry.message, detail: entry.detail ? JSON.stringify(entry.detail) : '' });
-            if (_idbReady && !_idbFlushTimer) _idbFlushTimer = setTimeout(_idbFlush, 3000);
-        } catch (e) {}
-    };
-    const idbGetAll = (cb) => {
-        try {
-            if (!_idb) { cb([]); return; }
-            _idbFlush();
-            const req = _idb.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).getAll();
-            req.onsuccess = (e) => cb(e.target.result || []);
-            req.onerror = () => cb([]);
-        } catch (e) { cb([]); }
-    };
-    (function idbOpen() {
-        try {
-            const req = indexedDB.open(IDB_NAME, 1);
-            req.onupgradeneeded = (e) => {
-                const db = e.target.result;
-                if (!db.objectStoreNames.contains(IDB_STORE)) {
-                    const os = db.createObjectStore(IDB_STORE, { keyPath: 'id', autoIncrement: true });
-                    os.createIndex('tsms', 'tsms', { unique: false });
-                }
-            };
-            req.onsuccess = (e) => { _idb = e.target.result; _idbReady = true; _idbFlush(); _idbPrune(); };
-            req.onerror = () => { _idbReady = false; };
-        } catch (e) {}
-    })();
-
-    const AUTO_ARCHIVE_AT = 1800;       // (旧)自動アーカイブ閾値。★PC-1.2.5で自動DLは廃止
+    const AUTO_ARCHIVE_AT = 1800;       // この件数に達したら自動アーカイブ (LOG_MAX_AM=2000 の手前)
     let _logArchiveBusy = false;
     const archiveLogToCsv = () => {
         if (_logArchiveBusy) return;
@@ -6379,8 +6274,7 @@
         LOG_BUFFER_AM.push(entry);
         if (LOG_BUFFER_AM.length > LOG_MAX_AM) LOG_BUFFER_AM.shift();
         saveLogAm();
-        try { idbAppend(entry); } catch (e) {}   // ★PC-1.2.5: 全履歴を IndexedDB に蓄積
-        // ★PC-1.2.5: 自動DL(archiveLogToCsv)は廃止。ファイルは増やさず、全履歴は IndexedDB→手動DLで取得。
+        if (LOG_BUFFER_AM.length >= AUTO_ARCHIVE_AT) { try { archiveLogToCsv(); } catch (e) {} }
         // ★v0.3.8.76: 重要タグは別バッファにも永続保持 (shift() 影響を受けない)
         try {
             if (CRITICAL_TAGS.has(category) || level === 'error' || level === 'warn') {
@@ -14948,7 +14842,7 @@
             const _mode = S.getMode && S.getMode();
             if (_mode && _mode !== MODE_STOPPED && /validateCaptcha/.test(location.href)) {
                 try { logAm('error', 'captcha', '⛔ CAPTCHA(画像認証)検出 → 停止(自動では解けない・手動で解いて再開)', { url: location.href.slice(0, 120) }); } catch (e) {}
-                try { _idbFlush(); } catch (e) {}   // ★PC-1.2.5: 検知時点のログを IndexedDB へ確実に書き込み(自動DLはしない)
+                try { archiveLogToCsv(); } catch (e) {}   // 検知時点のログを確実に保全
                 try { S.opFullStop(); } catch (e) {}
                 try { toast('⛔ CAPTCHA(画像認証)が出ました\n→ 停止しました。手動で解いてから再開してください', STOP_RED, 60000); } catch (e) {}
                 return;
