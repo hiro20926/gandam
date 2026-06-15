@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.2.6
+// @version      1.2.7
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.2.6';
+    const SCRIPT_VERSION = 'PC-1.2.7';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -5261,6 +5261,7 @@
                     '<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">' +
                         '<button id="lb-am-prod-rot-all-on" style="flex:1;min-width:120px;padding:9px;background:rgba(46,196,127,0.2);border:1px solid rgba(46,196,127,0.6);color:#9effc4;border-radius:5px;font-size:12px;font-weight:bold;">🔄 全部 巡回ON</button>' +
                         '<button id="lb-am-prod-rot-all-off" style="flex:1;min-width:120px;padding:9px;background:rgba(120,120,120,0.2);border:1px solid rgba(120,120,120,0.5);color:#ddd;border-radius:5px;font-size:12px;font-weight:bold;">⏸ 全部 巡回OFF</button>' +
+                        '<button id="lb-am-prod-sort-on" style="flex:1;min-width:120px;padding:9px;background:rgba(93,213,229,0.15);border:1px solid rgba(93,213,229,0.6);color:#9be7f5;border-radius:5px;font-size:12px;font-weight:bold;">🔼 巡回ONを上にまとめる</button>' +
                     '</div>' +
                     '<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">' +
                         '<button id="lb-am-prod-export" style="flex:1;min-width:140px;padding:11px;background:linear-gradient(180deg,rgba(93,213,229,0.95),rgba(2,136,209,0.95));color:#08151c;border:0;border-radius:5px;font-size:13px;font-weight:bold;box-shadow:0 0 12px rgba(93,213,229,0.45);">💾 CSV 書き出し</button>' +
@@ -5353,6 +5354,19 @@
                 if (rotAllOnBtn) rotAllOnBtn.addEventListener('click', () => setAllRotTargets(true));
                 const rotAllOffBtn = document.getElementById('lb-am-prod-rot-all-off');
                 if (rotAllOffBtn) rotAllOffBtn.addEventListener('click', () => setAllRotTargets(false));
+                // ★PC-1.2.7: 巡回ONを上にまとめる(表示の並べ替え。巡回順序・自動開始は不変=ONの相対順は保持)
+                const sortOnBtn = document.getElementById('lb-am-prod-sort-on');
+                if (sortOnBtn) sortOnBtn.addEventListener('click', () => {
+                    try {
+                        const list = listSavedProducts() || [];
+                        const onList = list.filter(function (p) { return isRotTarget(p.asin); });
+                        const offList = list.filter(function (p) { return !isRotTarget(p.asin); });
+                        setProductOrder(onList.concat(offList).map(function (p) { return p.asin; }));
+                        toast('🔼 巡回ON ' + onList.length + ' 件を上にまとめました', '#5dd5e5', 3000);
+                        closeOv();
+                        setTimeout(() => { try { productsBtn.click(); } catch (e) {} }, 200);
+                    } catch (e) {}
+                });
                 // ★PC版: 巡回ON/OFF トグル(商品ごと) — ON にした商品だけ巡回する
                 Array.prototype.forEach.call(ov.querySelectorAll('.lb-am-prod-rot'), (btn) => {
                     btn.addEventListener('click', () => {
