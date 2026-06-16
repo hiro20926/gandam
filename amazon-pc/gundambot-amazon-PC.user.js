@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.2.7
+// @version      1.2.8
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.2.7';
+    const SCRIPT_VERSION = 'PC-1.2.8';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -14237,23 +14237,20 @@
                 //   旧: この判定が if(getEffectiveQtyStop()) の中だったため OFF だと素通りし、
                 //       成功後もループ継続(「確定前で止まる」誤解 + 二重購入リスク)になっていた。
                 if (wasRecentClick) {
-                    try { logAm('warn', 'order-complete',
-                        '✅ 注文成功確認 (直近 click 後の数量更新検出 = 重複防止) → 完全停止', {
+                    // ★PC-1.2.8: 数量更新 + 直近click でも /gp/buy/thankyou/(ありがとうございました画面)
+                    //   未到達 = 注文は確定していない(固まって混戦に負けた可能性)。
+                    //   旧 v0.3.8.99 はこれを「✅注文成功」と誤判定して完全停止していた
+                    //   → 本当は買えていないのに止まり、自動復帰せず手動再起動が必要だった(6/16 23:59 の事例)。
+                    //   本物の成功判定は handleOrderComplete (/thankyou/ 到達=COMPLETE) のみ。
+                    //   ここでは停止せず、混戦負けとしてループ継続(自動復帰)する。
+                    try { logAm('warn', 'qty-update',
+                        '⚠ 直近click後の数量更新検出だが /thankyou/ 未到達 = 注文未確定(混戦負けの可能性) → ループ継続(自動復帰)', {
                         url: location.href.slice(0, 200),
                         clickAgoMs: recentClickAgo,
-                        qtyStop: getEffectiveQtyStop(),
                     }); } catch (e) {}
-                    try {
-                        toast('✅ 注文成功!\n(直近 click 後の重複防止メッセージで成功確認)\n' +
-                              '自動停止しました、次は🛒で新規開始',
-                              BUY_GREEN, 15000);
-                    } catch (e) {}
-                    try { S.setStep(STEP_ORDER_PLACED); } catch (e) {}
                     try { localStorage.removeItem('LB_AM_LAST_ORDER_CLICK_TS'); } catch (e) {}
-                    try { S.opFullStop(); } catch (e) {}
-                    return;
                 }
-                if (getEffectiveQtyStop()) {
+                if (getEffectiveQtyStop() && !wasRecentClick) {
                     try { logAm('error', 'qty-update',
                         '「数量更新」検出 (handleStockOutBuyNow 同期チェック) + qtyStop=ON → 完全停止', {
                         url: location.href.slice(0, 200),
@@ -15351,23 +15348,17 @@
                     // ★v0.3.8.99: 注文成功検出を qty_stop の外(最優先)へ(2箇所目)
                     //   直近 click + 数量更新 = 注文が通った事実 → qty_stop=ON/OFF どちらでも停止。
                     if (wasRecentClick) {
-                        try { logAm('warn', 'order-complete',
-                            '✅ 注文成功確認 (直近 click 後の数量更新検出 = 重複防止) → 完全停止', {
+                        // ★PC-1.2.8: 数量更新 + 直近click でも /thankyou/ 未到達 = 注文未確定。
+                        //   旧 v0.3.8.99 は誤って「✅注文成功」扱いで完全停止 → 自動復帰せず手動再起動が必要だった。
+                        //   本物の成功は handleOrderComplete (/thankyou/) のみ。混戦負けとしてループ継続する。
+                        try { logAm('warn', 'qty-update',
+                            '⚠ 直近click後の数量更新検出だが /thankyou/ 未到達 = 注文未確定(混戦負けの可能性) → ループ継続(自動復帰)', {
                             url: location.href.slice(0, 200),
                             clickAgoMs: recentClickAgo,
-                            qtyStop: getEffectiveQtyStop(),
                         }); } catch (e) {}
-                        try {
-                            toast('✅ 注文成功!\n(直近 click 後の重複防止メッセージで成功確認)\n' +
-                                  '自動停止しました、次は🛒で新規開始',
-                                  BUY_GREEN, 15000);
-                        } catch (e) {}
-                        try { S.setStep(STEP_ORDER_PLACED); } catch (e) {}
                         try { localStorage.removeItem('LB_AM_LAST_ORDER_CLICK_TS'); } catch (e) {}
-                        try { S.opFullStop(); } catch (e) {}
-                        return;
                     }
-                    if (getEffectiveQtyStop()) {
+                    if (getEffectiveQtyStop() && !wasRecentClick) {
                         try { logAm('error', 'qty-update',
                             '「数量更新」検出 (OTHER 同期チェック) + qtyStop=ON → 完全停止', {
                             url: location.href.slice(0, 200),
