@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.3.9.5
+// @version      0.3.9.6
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3297,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.3.9.5';
+    const SCRIPT_VERSION = '0.3.9.6';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -13333,14 +13333,44 @@
         const skipInitialSleep = !!(opts && opts.skipInitialSleep);
         try { logAm('info', 'handler', 'handleCheckout (SPC) 入室' + (skipInitialSleep ? ' [初期 sleep スキップ]' : '')); } catch (e) {}
         if (!skipInitialSleep) await sleep(1500);
-        let placeBtn = null;
+        // ★v0.3.9.6 ②: ボタン探索を 500ms polling → MutationObserver(出た瞬間に発火)へ。
+        //   旧: 500ms×最大10回 = 最悪0.5秒/サイクルの検出遅延。確定画面の「注文を確定する」が
+        //   描画された瞬間を捉えて即 performOrderConfirm に渡す(混戦での取り逃しを減らす)。
+        //   タイムアウト(10秒)時は従来どおり停止(HIRO 指示: iOSは止まれば"買えていない"と分かる
+        //   = ④ループ復帰は入れない)。50ms の保険ポーリングも併走(attribute/style 変化の取りこぼし対策)。
+        let placeBtn = findPlaceOrderButton(document);  // 既に出ていれば即決
         let waitMs = 0;
-        for (let i = 0; i < 10; i++) {
-            if (isStopped()) return;
-            placeBtn = findPlaceOrderButton(document);
-            if (placeBtn) { waitMs = i * 500; break; }
-            await sleep(500);
+        if (!placeBtn) {
+            const _t0 = Date.now();
+            placeBtn = await new Promise((resolve) => {
+                let done = false;
+                let obs = null, iv = null, to = null;
+                const finish = (el) => {
+                    if (done) return;
+                    done = true;
+                    try { if (obs) obs.disconnect(); } catch (e) {}
+                    try { if (iv) clearInterval(iv); } catch (e) {}
+                    try { if (to) clearTimeout(to); } catch (e) {}
+                    resolve(el || null);
+                };
+                const check = () => {
+                    if (isStopped()) { finish(null); return; }
+                    let el = null;
+                    try { el = findPlaceOrderButton(document); } catch (e) {}
+                    if (el) finish(el);
+                };
+                try {
+                    obs = new MutationObserver(check);
+                    obs.observe(document.documentElement || document.body,
+                        { childList: true, subtree: true, attributes: true });
+                } catch (e) {}
+                iv = setInterval(check, 50);   // 保険ポーリング
+                to = setTimeout(() => finish(null), 10000);  // タイムアウト10秒
+                check();  // 初回即チェック
+            });
+            waitMs = Date.now() - _t0;
         }
+        if (isStopped()) return;
         if (!placeBtn) {
             // ★v0.1.16.8: SPC ボタン未検出は error
             try {
@@ -14948,7 +14978,7 @@
             case 'SMART_WAGON': await handleSmartWagon();    break;
             case 'CART':        await handleClassicCart();   break;
             case 'ADDON_UPSELL': await handleAddOnUpsell();  break;  // ★v0.3.0
-            case 'CHECKOUT':    await handleCheckout();      break;  // ★v0.1.15.8: 復活
+            case 'CHECKOUT':    await handleCheckout({ skipInitialSleep: true }); break;  // ★v0.1.15.8: 復活 / ★v0.3.9.6 ①: 確定画面に着地済み=初期1.5秒待ち撤去(最短化)
             case 'STOCK_OUT_BUYNOW': await handleStockOutBuyNow(); break;
             case 'WAITING_ROOM': await handleWaitingRoom();  break;  // ★v0.3.8.81
             case 'AMAZON_ERROR': await handleAmazonError();  break;  // ★v0.3.8.22
