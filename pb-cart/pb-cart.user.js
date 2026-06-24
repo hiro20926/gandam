@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.26 2026-06-11 22:59 #306b5c JST
+// @version      v2.3.27 2026-06-24 23:16 #effa28 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -261,6 +261,21 @@
   //     (2) FAB がサイト側モーダル(「注文できる商品がございません」等)に覆われて見えなくなる事象を修復。
   //         ensureFloatingUI: FAB中心の最前面要素が FAB(orその子)でなければ覆われている → body末尾へ再append +
   //         z-index 2147483647 で最前面へ復帰(z-index値に依存せず確実)。 700ms 自己修復タイマーで自動。
+  //
+  // [Y] Phase 26 (2026-06-24 HIROさん指摘で確定・購入核心): 1発目を 6/11 反応駆動に揃える。 ★フリーズ根治★
+  //     原因(本日6/24実機確定): p-bandai SPA は描画直後 #buy が一瞬 enabled「カートに入れる」→ 直後に
+  //       disabled「在庫がありません」へ落ち着く。 旧来は buttonState の「攻め」(2026-05-09)+ phase11/14 の
+  //       「青で即POST/order充填で1発目」(iframe-POST時代の遺物)が、 この transient 青を掴んで1発目を即 click。
+  //       非オーダー品の押下は サイト新挙動で 35〜90秒フリーズ(検証ブラウザで click 一発90秒以上停止を再現)。
+  //       ※フリーズするのは必ず「1発目」。 2発目以降は元から各反復の buttonState() で grey なら撃たない。
+  //       ※在庫切れ品でも cart_add の order は充填済(例 order=2560670000004)→ phase14 の order ゲートは
+  //         在庫切れを弾けず無意味化していた。
+  //     対策(mainLoopBody, 連打ループ直前):
+  //       - settle 確認: stable_blue_settle_ms(既定600ms)の間 buttonState を監視。 grey/already/limit に
+  //         落ちたら transient と確定して break → 押す/リロード/成功の判断はループ i=0 の buttonState に委譲。
+  //         青のまま持続したら本物の在庫あり(発売開始の青は持続する=攻めは実質維持。 1発目が settle 分だけ遅れる)。
+  //       - 旧 phase14(order 充填待ち)は realButton では撤去、 iframe フォールバック時のみ実行。
+  //     confirm_stable_blue_before_first=false で旧動作(即押し)に即ロールバック可。 settle 窓は調整可。
   //
   // 過去の事故ログは HISTORY.md、 設計詳細は CLAUDE.md を参照。
   // 動いている仕組みを壊さないための鉄則:
@@ -712,6 +727,7 @@
     'phase10', 'phase11',          // ★Phase 10/11 新コードの例外・計測 (即テストの不具合追跡用)
     'post-diag', 'reload-diag',    // ★Phase 13 診断 (1発目究明 / リロード時間計測)
     'phase14',                     // ★Phase 14 order 充填待ち (有効1発目の核心計測)
+    'phase26',                     // ★Phase 26 1発目settle確認 (transient青の誤爆=フリーズ防止)
     'phase16',                     // ★Phase 16 本物ボタン+小窓待ち (実験の核心計測)
     'foreground',                  // ★Phase 17 表示中タブのみ稼働 (裏タブ停止/再開)
     'ui-heal',                     // ★Phase 18 FAB自己修復 (DOM差し替えで消えたFABの再注入)
@@ -1071,6 +1087,11 @@
         //   2500ms だと遅い端で空タイムアウト→リロードを繰り返す恐れがあるため余裕を持たせる。
         //   実際の充填時間は phase14 ログ(待ちNms)に残るので、 運用データで再調整可能。
         wait_order_fill_max_ms: 4000,      // order 充填待ちの上限。 超えたら POST せずリロード
+        // ★Phase 26 (2026-06-24): 1発目を撃つ前に「青が settle して持続しているか」を確認(6/11反応駆動を1発目に適用)。
+        //   SPA描画直後の transient「カートに入れる」を掴んで押すと、非オーダー品の押下でサイトが35〜90秒
+        //   フリーズする(本日実機確定)。 settle窓の間に grey 化したら transient と確定して撃たない。
+        confirm_stable_blue_before_first: true,  // true=settle確認してから1発目(推奨) / false=旧動作(即押し・フリーズ再発の恐れ)
+        stable_blue_settle_ms: 600,              // settle確認の窓(ms)。 本物の在庫青はこの間も持続。 フリーズ再発時は増やす(攻め速度とのトレードオフ)
         // ★Phase 16 (2026-06-09 実験): 2発目以降を「本物のカートボタン実クリック+小窓待ち」にする
         //   6/9 ログで判明: 同一ページ上の iframe 連打は 2発目以降ほぼ全部 /error/4/(bot拒否)。
         //   HIROさんの手動フロー(押す→小窓を確認→次を押す)を再現するため、 2発目以降は実ボタンを click し
@@ -2698,21 +2719,36 @@
     //   新: 直前再判定を撤廃。 mainLoop 入口で OK 検知済みなら無駄判定せず即 cart_add POST へ
     //       連打中の試行間チェックは残す(連打中に grey 化したら停止)
 
-    // ★★★ Phase 14 (2026-06-05): order(注文ID) 充填待ち ★★★
-    //   6/5 ログ実測 (6サンプル100%相関): order 長=0(空) のまま POST → /error/4/ で弾かれ、
-    //   order 長=13(充填済) で POST → SUCCESS。 order はページ JS が読込後 perf 2-4s で遅れて埋める。
-    //   1発目最速の即押し (perf~2.2s) は order 空のまま撃つ → 「1発目が無効」 の正体。
-    //   対策: 青検知後、 POST 前に order 欄が非空になるまで 50ms ポーリング(上限既定 2500ms)。
-    //     - 埋まった → その瞬間に連打ループへ(有効な1発目)
-    //     - 上限まで空 → POST せずリロード(空POST は弾かれるだけで BotManager 警戒を招く無駄撃ち)
-    //     - 途中で grey 化 → ループ i=0 の buttonState で在庫切れ処理(従来通り)
-    //   オプション wait_order_fill_before_post=false で旧動作(即 POST)に戻せる。
-    if ((cfg.options || {}).wait_order_fill_before_post !== false) {
+    // ★★★ Phase 26 (2026-06-24): 1発目を 6/11 反応駆動に揃える — 「青が settle して持続するか」を確認してから撃つ ★★★
+    //   背景(本日6/24実機確定): p-bandai SPA は描画直後 #buy が一瞬 enabled「カートに入れる」→ 直後に
+    //   disabled「在庫がありません」へ落ち着く。 この transient 青を掴んで本物ボタンを click すると、
+    //   非オーダー品の押下でサイトが 35〜90秒フリーズする(検証ブラウザで click 一発90秒以上停止を再現)。
+    //   対策: settle 窓の間 buttonState を監視 → grey/already/limit に落ちたら transient と確定して break。
+    //   ★ここでは押す/リロード/成功の判断はしない(「落ち着くまで待つ」だけ)。 判定は従来どおりループ i=0 の
+    //   buttonState() が行う(OK→押す / 在庫切れ→リロード / already・limit→成功)。 2発目以降が既にやっている
+    //   「状態を見てから動く」を1発目にも適用するだけ = 6/11 反応駆動への整合。 false で旧動作(即押し)に戻せる。
+    const _rbModeEarly = (cfg.options || {}).realbutton_retry !== false;
+    if ((cfg.options || {}).confirm_stable_blue_before_first !== false) {
+      const _settleMs = (cfg.options || {}).stable_blue_settle_ms || 600;
+      const _st0 = Date.now();
+      let _settleReason = 'OK持続';
+      while (Date.now() - _st0 < _settleMs) {
+        if (loadState().paused === true) { updateUI(); return; }
+        const _sbs = buttonState();
+        if (!_sbs.clickable) { _settleReason = _sbs.reason; break; }  // transient が settle → ループ i=0 の判定へ委譲
+        await sleep(70);
+      }
+      pbLog('🎯','phase26',`1発目 settle 確認 (${Date.now()-_st0}ms / ${_settleReason}) → ループ i=0 の状態判定へ`);
+    }
+    // ★旧 Phase 14 の order 充填待ちは iframe フォールバック時のみ実行(realButton click では不要)。
+    //   理由: order 充填ゲートは iframe POST の空POST(/error/4/)防止用。 realButton では使わない上、
+    //   本日確認のとおり在庫切れ品でも order は充填済(例 order=2560670000004)なので在庫切れを弾けず無意味。
+    if (!_rbModeEarly && (cfg.options || {}).wait_order_fill_before_post !== false) {
       const _wMax = (cfg.options || {}).wait_order_fill_max_ms || 4000;
       const _wr = await waitForCartOrderFilled(_wMax);
       if (_wr.reason === 'paused') { updateUI(); return; }
       if (_wr.ok) {
-        pbLog('🎯','phase14',`order 充填確認 (待ち${_wr.waitedMs}ms/${_wr.polls}回) → 有効な1発目を POST`);
+        pbLog('🎯','phase14',`order 充填確認 (待ち${_wr.waitedMs}ms/${_wr.polls}回) → 有効な1発目を POST(iframe)`);
       } else if (_wr.reason === 'timeout') {
         // 上限まで空 → 撃たずにリロード(空POST=/error/4/ を踏まない)
         pbError('warn','phase14',`order が ${_wMax}ms 経っても空 → POST せずリロード(空POSTは弾かれる無駄撃ち)`);
@@ -4006,7 +4042,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.26 2026-06-11 22:59 #306b5c JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.27 2026-06-24 23:16 #effa28 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -5744,7 +5780,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.26 2026-06-11 22:59 #306b5c JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.27 2026-06-24 23:16 #effa28 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -5964,7 +6000,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.26 2026-06-11 22:59 #306b5c JST');
+    lines.push('🔧 build: v2.3.27 2026-06-24 23:16 #effa28 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
