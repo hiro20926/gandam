@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.27 2026-06-24 23:16 #effa28 JST
+// @version      v2.3.28 2026-06-25 06:33 #99f6a6 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -276,6 +276,15 @@
   //         青のまま持続したら本物の在庫あり(発売開始の青は持続する=攻めは実質維持。 1発目が settle 分だけ遅れる)。
   //       - 旧 phase14(order 充填待ち)は realButton では撤去、 iframe フォールバック時のみ実行。
   //     confirm_stable_blue_before_first=false で旧動作(即押し)に即ロールバック可。 settle 窓は調整可。
+  //
+  // [Z] Phase 27 (2026-06-25 緊急修正・購入核心): 成功誤判定(カート未投入なのにカート確保と報告)の根治。
+  //     原因: CART_ADDED_RE(成功小窓判定)に「商品数変更が出来ない|個数に不足」 が入っていた(Phase 21/6-11 追加)。
+  //       6/11 は「在庫不足で個数を減らして入った=成功」と解釈したが、 6/25 実機で ★この小窓が出ても
+  //       カート未投入(ボタンは青「カートに入れる」のまま)★ を確認 = 成功とは限らない曖昧文言。 在庫ありの
+  //       リックディアス(クワトロ機)で4件中3件 偽の「カート確保」を報告(realbtn-added)。
+  //     対策: 「商品数変更が出来ない|個数に不足」 を CART_ADDED_RE(成功) から ERR_RE(非成功・小窓を閉じて継続) へ移動。
+  //       成功は明確な文言(カートに商品が追加されました 等)のみに限定。 真にカート入りなら buttonState の
+  //       ALREADY_IN_CART/LIMIT(リロード後)で確実に検知される(偽陰性も残らない)。
   //
   // 過去の事故ログは HISTORY.md、 設計詳細は CLAUDE.md を参照。
   // 動いている仕組みを壊さないための鉄則:
@@ -1612,11 +1621,14 @@
   }
 
   // 「カートに商品が追加されました」成功ポップアップを検知 → 成功シグナル
-  // ★成功判定の文言。 ★Phase 21 (2026-06-11): 「在庫不足で個数を減らして入った」 も成功に追加。
-  //   実発売で「商品在庫がご希望個数に不足したため商品数変更が出来ない商品が御座いました。カートページにて
-  //   ご確認下さい。」 が出た = ★商品はカートに入っている★(希望個数より少ないだけ)。 これを成功と認識せず
-  //   連打を続けて取りこぼしていた(HIROさん 6/11 指摘)。
-  const CART_ADDED_RE = /カートに商品が追加されました|カートに追加しました|カートインしました|商品数変更が出来ない|個数に不足/;
+  // ★Phase 27 (2026-06-25 緊急修正): 「商品在庫がご希望個数に不足したため商品数変更が出来ない商品が御座いました。
+  //   カートページにてご確認下さい。」 を成功判定から除外(商品数変更が出来ない|個数に不足 を削除)。
+  //   理由: Phase 21(6/11)では「在庫不足で個数を減らして入った=成功」と判断したが、 6/25 実機で
+  //   ★この小窓が出てもカート未投入(ボタンは青「カートに入れる」のまま)★ のケースを確認 → 成功とは限らない曖昧文言。
+  //   在庫ありの商品(リックディアス クワトロ機)で この小窓を成功誤判定し「カート確保」を4件中3件 誤報告
+  //   (HIROさん 6/25 緊急指摘)。 → 成功は明確な文言のみに限定。 この曖昧文言は ERR_RE 側(非成功・小窓を閉じて継続)
+  //   で扱う。 真にカート入りなら buttonState の ALREADY_IN_CART(リロード後)で別途確実に検知される。
+  const CART_ADDED_RE = /カートに商品が追加されました|カートに追加しました|カートインしました/;
   function detectCartAddedPopup() {
     if (!document.body) return false;
     const text = document.body.innerText || '';
@@ -1969,7 +1981,10 @@
     const cap = waitCapMs || 90000;
     // エラー/売り切れ系文言。 ★Phase 21b (2026-06-11): 実発売で「注文できる商品がございません」 が出て
     //   ERR_RE に無く realButtonAttemptOnce が約30-47秒スタックした(watchdog救出まで固まる)→ 追加。
-    const ERR_RE = /大変混み合っているため|在庫がございません|追加できません|エラーが発生|注文できる商品がございません|販売(を|が)?終了|受付(を|が)?終了|完売/;
+    // ★Phase 27 (2026-06-25): 「商品数変更が出来ない|個数に不足」 を成功(CART_ADDED_RE)から非成功(ERR_RE)へ移動。
+    //   この小窓はカート未投入でも出る曖昧文言で、 成功誤判定の主因だった(6/25 HIROさん緊急指摘)。
+    //   ERR_RE 扱い = 小窓を閉じて連打継続。 真にカート入りなら buttonState の ALREADY_IN_CART/LIMIT で検知される。
+    const ERR_RE = /大変混み合っているため|在庫がございません|追加できません|エラーが発生|注文できる商品がございません|販売(を|が)?終了|受付(を|が)?終了|完売|商品数変更が出来ない|個数に不足/;
     const btn = document.getElementById('buy') || document.getElementById('buy_side');
     const _mk = (result, extra) => Object.assign({ result, afterIds: beforeIds,
       timings: { post: Date.now()-t0, body:0, decode:0, cartFetch:0, total: Date.now()-t0 } }, extra || {});
@@ -4042,7 +4057,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.27 2026-06-24 23:16 #effa28 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.28 2026-06-25 06:33 #99f6a6 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -5780,7 +5795,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.27 2026-06-24 23:16 #effa28 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.28 2026-06-25 06:33 #99f6a6 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -6000,7 +6015,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.27 2026-06-24 23:16 #effa28 JST');
+    lines.push('🔧 build: v2.3.28 2026-06-25 06:33 #99f6a6 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
