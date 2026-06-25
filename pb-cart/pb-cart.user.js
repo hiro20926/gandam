@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.28 2026-06-25 06:33 #99f6a6 JST
+// @version      v2.3.29 2026-06-25 22:41 #c1e103 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -2745,15 +2745,36 @@
     const _rbModeEarly = (cfg.options || {}).realbutton_retry !== false;
     if ((cfg.options || {}).confirm_stable_blue_before_first !== false) {
       const _settleMs = (cfg.options || {}).stable_blue_settle_ms || 600;
+      // ★Phase 28 (2026-06-25 HIROさん指摘『正しく青を認識すれば解決』): 文字だけでなく「色」で判定。
+      //   実機調査で在庫切れ #buy は 背景=灰色 rgb(153,153,153) + disabled。 本物の青は青系背景。
+      //   SPA描画で文字「カートに入れる」が先に出て背景がまだ灰色の過渡を、 buttonState は文字+disabled しか
+      //   見ないため「青」と誤認 → 押下 → フリーズ。 ここで背景色が無効灰色なら 1発目を撃たずリロード。
+      //   ★加えて、判定時のボタンの実際の見た目(色/クラス)をログ採取 → transient の正体を実データで確定する。
+      const _DISABLED_GREY = 'rgb(153,153,153)';
       const _st0 = Date.now();
-      let _settleReason = 'OK持続';
+      let _settleReason = 'OK持続', _greyBg = false, _capBg = '', _capCls = '';
       while (Date.now() - _st0 < _settleMs) {
         if (loadState().paused === true) { updateUI(); return; }
         const _sbs = buttonState();
-        if (!_sbs.clickable) { _settleReason = _sbs.reason; break; }  // transient が settle → ループ i=0 の判定へ委譲
+        const _b = document.getElementById('buy') || document.getElementById('buy_side');
+        if (_b) { try { _capBg = getComputedStyle(_b).backgroundColor; _capCls = (_b.className || '').toString().slice(0,30); } catch (_) {} }
+        if (!_sbs.clickable) { _settleReason = _sbs.reason; break; }            // transient が settle(文字で grey化) → ループ i=0 へ委譲
+        if (_capBg.replace(/\s/g,'') === _DISABLED_GREY) { _greyBg = true; _settleReason = 'GREY_BG(在庫切れ色・文字先行)'; break; }  // ★色で在庫切れ確定
         await sleep(70);
       }
-      pbLog('🎯','phase26',`1発目 settle 確認 (${Date.now()-_st0}ms / ${_settleReason}) → ループ i=0 の状態判定へ`);
+      pbLog('🎯','phase26',`1発目 settle 確認 (${Date.now()-_st0}ms / ${_settleReason}) bg=${_capBg} cls=${_capCls}`);
+      if (_greyBg) {
+        // 背景=無効灰色 = 在庫切れの過渡(文字だけ青) → 撃たずリロード(フリーズ根絶)
+        const sGB = loadState();
+        const atGB = sGB.productAttempts[target.id] || { reloads: 0 };
+        atGB.reloads = (atGB.reloads || 0) + 1;
+        sGB.productAttempts[target.id] = atGB;
+        saveState(sGB);
+        await humanSleep(timing().grey_mid_reload_sleep_ms);
+        if (loadState().paused === true) { updateUI(); return; }
+        await safeReload('phase26-grey-bg');
+        return;
+      }
     }
     // ★旧 Phase 14 の order 充填待ちは iframe フォールバック時のみ実行(realButton click では不要)。
     //   理由: order 充填ゲートは iframe POST の空POST(/error/4/)防止用。 realButton では使わない上、
@@ -4057,7 +4078,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.28 2026-06-25 06:33 #99f6a6 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.29 2026-06-25 22:41 #c1e103 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -5795,7 +5816,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.28 2026-06-25 06:33 #99f6a6 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.29 2026-06-25 22:41 #c1e103 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -6015,7 +6036,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.28 2026-06-25 06:33 #99f6a6 JST');
+    lines.push('🔧 build: v2.3.29 2026-06-25 22:41 #c1e103 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
