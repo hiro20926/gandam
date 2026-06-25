@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.29 2026-06-25 22:41 #c1e103 JST
+// @version      v2.3.30 2026-06-25 23:11 #9a09cf JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -285,6 +285,19 @@
   //     対策: 「商品数変更が出来ない|個数に不足」 を CART_ADDED_RE(成功) から ERR_RE(非成功・小窓を閉じて継続) へ移動。
   //       成功は明確な文言(カートに商品が追加されました 等)のみに限定。 真にカート入りなら buttonState の
   //       ALREADY_IN_CART/LIMIT(リロード後)で確実に検知される(偽陰性も残らない)。
+  //
+  // [AA] Phase 29 (2026-06-25 HIROさん指摘で確定・購入核心): 判定の土台を「ボタン表示」から「在庫データ」へ。 ★フリーズ根治の本筋★
+  //     経緯: 在庫切れ品の#buyは描画直後 一瞬「カートに入れる」+enabled になり、 本物の青と 文字・色・disabled 全て一致。
+  //       色は :disabled 由来(有効時は常に青 rgb(69,156,225)/無効時のみ灰 rgb(153,153,153))→ 色でも見分け不可(Phase28失敗)。
+  //       時間窓(Phase26)も殺到時はAkamai遅延で取り逃す(HIROさん却下)。 ＝ボタン表示からは原理的に判定不能。
+  //     発見(2026-06-25 実機): ページに server-rendered の在庫データが <script> として入っている:
+  //       orderstock_list={"<order>":"○"/"△"/"×"}  ○=在庫あり △=残りわずか ×=在庫無し / all_stock_out=""or"全て在庫無し"
+  //       / ecv_non_stock_mark="×"。 在庫あり(○/△)・在庫切れ(×)とも実データで確認済み。
+  //     対策(stockJudge + mainLoopBody 1発目ゲート): <script> の textContent を正規表現で読み(iOS Userscriptsの
+  //       サンドボックス/CSP に非依存)、 ★在庫あり(×以外)と確証できた時だけ★ 連打ループへ。 在庫切れ/未取得は
+  //       押さずリロード。 ＝在庫切れ品を押す→フリーズ が構造的に消える。 時間・色・Akamai遅延に非依存。
+  //       単一バリエーションは orderstock_list の唯一キーで即判定(order欄の充填待ち不要=攻めも速い)。
+  //     ロールバック: data_stock_judge=false で旧 Phase26/28(settle/色)方式に戻る(else節として温存)。 連打/成功検知は無変更。
   //
   // 過去の事故ログは HISTORY.md、 設計詳細は CLAUDE.md を参照。
   // 動いている仕組みを壊さないための鉄則:
@@ -737,6 +750,7 @@
     'post-diag', 'reload-diag',    // ★Phase 13 診断 (1発目究明 / リロード時間計測)
     'phase14',                     // ★Phase 14 order 充填待ち (有効1発目の核心計測)
     'phase26',                     // ★Phase 26 1発目settle確認 (transient青の誤爆=フリーズ防止)
+    'phase29',                     // ★Phase 29 在庫データ判定 (orderstock_listで在庫あり確証してから押下)
     'phase16',                     // ★Phase 16 本物ボタン+小窓待ち (実験の核心計測)
     'foreground',                  // ★Phase 17 表示中タブのみ稼働 (裏タブ停止/再開)
     'ui-heal',                     // ★Phase 18 FAB自己修復 (DOM差し替えで消えたFABの再注入)
@@ -1101,6 +1115,11 @@
         //   フリーズする(本日実機確定)。 settle窓の間に grey 化したら transient と確定して撃たない。
         confirm_stable_blue_before_first: true,  // true=settle確認してから1発目(推奨) / false=旧動作(即押し・フリーズ再発の恐れ)
         stable_blue_settle_ms: 600,              // settle確認の窓(ms)。 本物の在庫青はこの間も持続。 フリーズ再発時は増やす(攻め速度とのトレードオフ)
+        // ★Phase 29 (2026-06-25): 在庫データ判定。 ボタン表示でなくサイトの在庫データ(orderstock_list/×○△)で
+        //   在庫ありを確証してから押す。 在庫切れは原理的に押さない=フリーズ根絶。 時間・色・Akamaiに非依存。
+        //   ★ロールバック: false にすると上の confirm_stable_blue(Phase26/28)の旧動作に戻る。
+        data_stock_judge: true,                  // true=在庫データ判定(新・推奨) / false=旧settle方式に戻す
+        data_stock_wait_ms: 4000,                // 在庫データが揃うまで待つ上限(ms)。 揃わなければ押さずリロード
         // ★Phase 16 (2026-06-09 実験): 2発目以降を「本物のカートボタン実クリック+小窓待ち」にする
         //   6/9 ログで判明: 同一ページ上の iframe 連打は 2発目以降ほぼ全部 /error/4/(bot拒否)。
         //   HIROさんの手動フロー(押す→小窓を確認→次を押す)を再現するため、 2発目以降は実ボタンを click し
@@ -1755,6 +1774,71 @@
     if (btn.disabled) return { clickable: false, reason: 'DISABLED', text };
     return { clickable: false, reason: 'TEXT', text };
   }
+
+  // ★★★ Phase 29 (2026-06-25): 在庫データ判定 ★★★
+  //   ボタンの見た目(optimistic青/灰色/disabled)や時間ではなく、 サイト自身が在庫切れ判定に使う
+  //   インラインJS変数を読む = 在庫の真実。 ボタン描画・時間・Akamai遅延に依存しない。
+  //   実機確認(2026-06-25): ページに以下が server-rendered の <script> として入っている:
+  //     orderstock_list = {"<order>":"○"/"△"/"×"}   ○=在庫あり △=残りわずか ×=在庫無し
+  //     all_stock_out   = ""(在庫あり) / "全て在庫無し"(全滅)
+  //     ecv_non_stock_mark = "×"  ← サイトが定義する「在庫無しマーク」
+  //   iOS の Userscripts は window 変数を直接読めない可能性があるため、 <script> の textContent
+  //   (DOM文字列)を正規表現で読む = サンドボックス/CSP 無関係で確実。
+  function readStockData() {
+    const out = { orderstock: null, allOut: '', haveAllOut: false, nsMark: '×', haveData: false };
+    // (1) window 直読(サンドボックスでなければ最速・確実)。 iOS Userscripts は読めない可能性 → (2) にフォールバック
+    try {
+      if (window.orderstock_list && typeof window.orderstock_list === 'object') { out.orderstock = window.orderstock_list; out.haveData = true; }
+      if (typeof window.all_stock_out !== 'undefined' && window.all_stock_out !== null) { out.allOut = String(window.all_stock_out); out.haveAllOut = true; out.haveData = true; }
+      if (typeof window.ecv_non_stock_mark !== 'undefined' && window.ecv_non_stock_mark) { out.nsMark = String(window.ecv_non_stock_mark); }
+    } catch (_) {}
+    // (2) インライン <script> のテキストから(DOM文字列読取=サンドボックス/CSP 非依存)
+    try {
+      const scripts = document.querySelectorAll('script:not([src])');
+      for (const s of scripts) {
+        const t = s.textContent || '';
+        if (!out.orderstock && t.indexOf('orderstock_list') >= 0) {
+          const m = t.match(/orderstock_list\s*=\s*(\{[\s\S]*?\})\s*;/);
+          if (m) {
+            const obj = {}; const re = /["']([^"']+)["']\s*:\s*["']([^"']*)["']/g; let mm;
+            while ((mm = re.exec(m[1])) !== null) { obj[mm[1]] = mm[2]; }
+            if (Object.keys(obj).length) { out.orderstock = obj; out.haveData = true; }
+          }
+        }
+        if (!out.haveAllOut) {
+          const m = t.match(/all_stock_out\s*=\s*["']([^"']*)["']/);
+          if (m) { out.allOut = m[1]; out.haveAllOut = true; out.haveData = true; }
+        }
+        const mk = t.match(/ecv_non_stock_mark\s*=\s*["']([^"']*)["']/);
+        if (mk) out.nsMark = mk[1];
+      }
+    } catch (_) {}
+    return out;
+  }
+  // 在庫判定: { ready, soldOut, mark, src }  ready=false は「データ未取得=確証できない」
+  function stockJudge() {
+    const sd = readStockData();
+    const NS = sd.nsMark || '×';
+    // (a) 全て在庫無し = 確実に売切(最優先)
+    if (sd.haveAllOut && sd.allOut && sd.allOut.length > 0) return { ready: true, soldOut: true, mark: 'allOut:' + sd.allOut, src: 'allout' };
+    if (!sd.orderstock) return { ready: false, soldOut: false, mark: '', src: 'no-stocklist' };
+    const keys = Object.keys(sd.orderstock);
+    // (b) 単一バリエーション(HIROのガンプラ): その1つの在庫マークが全て。 order欄の充填を待たず即判定
+    if (keys.length === 1) {
+      const mk = sd.orderstock[keys[0]];
+      return { ready: true, soldOut: mk === NS, mark: mk, src: 'single' };
+    }
+    // (c) 多バリエーション: cart_add フォームの order 欄で対象を照合
+    const cf = findCartFormOnPage();
+    const oi = cf ? cf.querySelector('input[name="order"]') : null;
+    const oid = oi ? (oi.value || '').trim() : '';
+    if (oid && Object.prototype.hasOwnProperty.call(sd.orderstock, oid)) {
+      const mk = sd.orderstock[oid];
+      return { ready: true, soldOut: mk === NS, mark: mk, src: 'order' };
+    }
+    return { ready: false, soldOut: false, mark: '', src: 'order-pending' };
+  }
+
   // ★cart_add 密度 throttle: Akamai/プレバン bot 検知を構造的に避ける
   //   HIROさん 2026-05-09 観察: /cart_err/ にリダイレクト = サーバ側 bot 検知反応
   //   累積 cart_add POST が短時間に多すぎると bot 判定されてカート無効化される
@@ -2743,7 +2827,36 @@
     //   buttonState() が行う(OK→押す / 在庫切れ→リロード / already・limit→成功)。 2発目以降が既にやっている
     //   「状態を見てから動く」を1発目にも適用するだけ = 6/11 反応駆動への整合。 false で旧動作(即押し)に戻せる。
     const _rbModeEarly = (cfg.options || {}).realbutton_retry !== false;
-    if ((cfg.options || {}).confirm_stable_blue_before_first !== false) {
+    // ★★★ Phase 29 (2026-06-25): 在庫データ判定で1発目をゲート(ボタン表示・時間に非依存) ★★★
+    //   サイトの在庫データ(orderstock_list の ○/△/×)を読み、 在庫ありと確証できた時だけ連打ループへ。
+    //   在庫切れ/未取得は押さずリロード=在庫切れ品の押下→フリーズが構造的に消える。
+    //   ロールバック: data_stock_judge=false で下の Phase26/28(settle/色)方式に戻る。
+    if ((cfg.options || {}).data_stock_judge !== false) {
+      const _cap = (cfg.options || {}).data_stock_wait_ms || 4000;
+      const _t0 = Date.now();
+      let _sj = stockJudge();
+      while (!_sj.ready && Date.now() - _t0 < _cap) {
+        if (loadState().paused === true) { updateUI(); return; }
+        await sleep(80);
+        _sj = stockJudge();
+      }
+      pbLog('🎯','phase29',`在庫データ判定: ready=${_sj.ready} soldOut=${_sj.soldOut} mark=${_sj.mark||''} src=${_sj.src} (${Date.now()-_t0}ms)`);
+      if (!_sj.ready || _sj.soldOut) {
+        // 在庫無し or データ未取得(確証できない) → 押さずリロードで監視継続(フリーズ回避)
+        const sDS = loadState();
+        const atDS = sDS.productAttempts[target.id] || { reloads: 0 };
+        atDS.reloads = (atDS.reloads || 0) + 1;
+        sDS.productAttempts[target.id] = atDS;
+        saveState(sDS);
+        updateUI({ status: _sj.ready ? `🔍 在庫無し(${_sj.mark}) → 監視継続` : '🔍 在庫データ待ち → リロード' });
+        await humanSleep(timing().grey_mid_reload_sleep_ms);
+        if (loadState().paused === true) { updateUI(); return; }
+        await safeReload(_sj.ready ? 'phase29-soldout' : 'phase29-no-data');
+        return;
+      }
+      // 在庫あり(○/△)を確証 → 連打ループへ(本物ボタンを押す。 動作は従来どおり)
+      pbLog('🎯','phase29',`在庫あり確証(mark=${_sj.mark}) → カート投入へ`);
+    } else if ((cfg.options || {}).confirm_stable_blue_before_first !== false) {
       const _settleMs = (cfg.options || {}).stable_blue_settle_ms || 600;
       // ★Phase 28 (2026-06-25 HIROさん指摘『正しく青を認識すれば解決』): 文字だけでなく「色」で判定。
       //   実機調査で在庫切れ #buy は 背景=灰色 rgb(153,153,153) + disabled。 本物の青は青系背景。
@@ -4078,7 +4191,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.29 2026-06-25 22:41 #c1e103 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.30 2026-06-25 23:11 #9a09cf JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -5816,7 +5929,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.29 2026-06-25 22:41 #c1e103 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.30 2026-06-25 23:11 #9a09cf JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -6036,7 +6149,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.29 2026-06-25 22:41 #c1e103 JST');
+    lines.push('🔧 build: v2.3.30 2026-06-25 23:11 #9a09cf JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
