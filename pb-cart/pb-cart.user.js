@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.30 2026-06-25 23:11 #9a09cf JST
+// @version      v2.3.31 2026-06-27 14:07 #8c0879 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1120,6 +1120,10 @@
         //   ★ロールバック: false にすると上の confirm_stable_blue(Phase26/28)の旧動作に戻る。
         data_stock_judge: true,                  // true=在庫データ判定(新・推奨) / false=旧settle方式に戻す
         data_stock_wait_ms: 4000,                // 在庫データが揃うまで待つ上限(ms)。 揃わなければ押さずリロード
+        // ★Phase 29b (2026-06-27): 在庫切れ監視のリロード間隔(人らしいゆらぎ)。 proven(6-11)分布の1-4秒帯に合わせ
+        //   <1秒の機械的連続を排除。 在庫あり(○/△)は即押下で不変(ここは在庫切れ監視のみ)。 値は運用で調整可。
+        stock_recheck_min_ms: 1000,              // 在庫切れ時の再確認リロード間隔・下限
+        stock_recheck_max_ms: 4000,              // 同・上限(min〜max のランダム)
         // ★Phase 16 (2026-06-09 実験): 2発目以降を「本物のカートボタン実クリック+小窓待ち」にする
         //   6/9 ログで判明: 同一ページ上の iframe 連打は 2発目以降ほぼ全部 /error/4/(bot拒否)。
         //   HIROさんの手動フロー(押す→小窓を確認→次を押す)を再現するため、 2発目以降は実ボタンを click し
@@ -2848,9 +2852,16 @@
         atDS.reloads = (atDS.reloads || 0) + 1;
         sDS.productAttempts[target.id] = atDS;
         saveState(sDS);
-        updateUI({ status: _sj.ready ? `🔍 在庫無し(${_sj.mark}) → 監視継続` : '🔍 在庫データ待ち → リロード' });
-        await humanSleep(timing().grey_mid_reload_sleep_ms);
-        if (loadState().paused === true) { updateUI(); return; }
+        // ★Phase 29b (2026-06-27 HIROさん指摘): 在庫切れ監視のリロード間隔を人らしくランダム化(既定1〜4秒)。
+        //   理由(6-27ログ): Phase29で「10押し→reload」を撤去し裸の高速リロード(<1秒の塊が51%)になった → bot材料の懸念。
+        //   proven(6-11/4確保・BANなし)分布の 1-4秒帯(全体の~41%が該当)に合わせ、<1秒の連続を排除。
+        //   ★在庫あり(○/△)検知は別経路で即押下=ゆらぎ無し(攻めの速さは不変)。 ここは在庫切れ/データ未取得の監視のみ。
+        const _rmin = (cfg.options || {}).stock_recheck_min_ms || 1000;
+        const _rmax = (cfg.options || {}).stock_recheck_max_ms || 4000;
+        const _rwait = Math.round(_rmin + Math.random() * Math.max(0, _rmax - _rmin));
+        updateUI({ status: _sj.ready ? `🔍 在庫無し(${_sj.mark}) → ${(_rwait/1000).toFixed(1)}秒後に再確認` : '🔍 在庫データ待ち → リロード' });
+        pbLog('🎯','phase29',`在庫切れ監視 → ${_rwait}ms 後にリロード(人らしいゆらぎ ${_rmin}-${_rmax}ms)`);
+        if (await interruptibleSleep(_rwait)) { updateUI(); return; }
         await safeReload(_sj.ready ? 'phase29-soldout' : 'phase29-no-data');
         return;
       }
@@ -4191,7 +4202,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.30 2026-06-25 23:11 #9a09cf JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.31 2026-06-27 14:07 #8c0879 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -5929,7 +5940,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.30 2026-06-25 23:11 #9a09cf JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.31 2026-06-27 14:07 #8c0879 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -6149,7 +6160,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.30 2026-06-25 23:11 #9a09cf JST');
+    lines.push('🔧 build: v2.3.31 2026-06-27 14:07 #8c0879 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
