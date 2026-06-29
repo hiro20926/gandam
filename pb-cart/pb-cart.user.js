@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.32 2026-06-29 23:01 #2b5cd8 JST
+// @version      v2.3.33 2026-06-30 00:08 #03a311 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -751,6 +751,7 @@
     'phase14',                     // ★Phase 14 order 充填待ち (有効1発目の核心計測)
     'phase26',                     // ★Phase 26 1発目settle確認 (transient青の誤爆=フリーズ防止)
     'phase29',                     // ★Phase 29 在庫データ判定 (orderstock_listで在庫あり確証してから押下)
+    'popup-struct',                // ★Phase 30b 注文不可アラートの実構造ログ (本物の閉じるボタン特定用)
     'phase16',                     // ★Phase 16 本物ボタン+小窓待ち (実験の核心計測)
     'foreground',                  // ★Phase 17 表示中タブのみ稼働 (裏タブ停止/再開)
     'ui-heal',                     // ★Phase 18 FAB自己修復 (DOM差し替えで消えたFABの再注入)
@@ -1699,25 +1700,42 @@
         depth++;
       }
     }
-    // ★Phase 30 (2026-06-29 HIROさん指摘): 確実に閉じるフォールバック。
-    //   上の方式は「閉じるボタンの祖先に文言 かつ innerText長<500」を要求するが、 実機調査で
-    //   ①モーダルの器(FORM)が703字>500 ②「注文できる商品がございません」が閉じるボタン(detailFnExit)の
-    //   祖先内に無い(別アラート要素) → 条件に当てはまらず閉じられず、 HIROさんが手動で「閉じる」を押していた。
-    //   対策: このエラーアラート文言がページに出ていたら、 表示中の「閉じる/✕/×」を直接クリック(祖先・長さガード無し
-    //   ＝手動で押すのと同じ)。 OK は Cookie 同意の恐れがあるため除外。
-    if (dismissed === 0) {
-      try {
-        const _body = document.body ? (document.body.innerText || '') : '';
-        if (/注文できる商品がございません|大変混み合っているため|エラーが発生しました|追加できません/.test(_body)) {
-          const _hard = $$('button, a, span, div').filter(e => {
-            const t = (e.innerText || '').trim();
-            return (t === '閉じる' || t === '✕' || t === '×') && e.offsetParent !== null;
-          });
-          for (const c of _hard) { try { c.click(); dismissed++; } catch (_) {} }
-          if (dismissed > 0) pbLog('🗙','popup',`確実閉じ: エラーアラートの「閉じる」を直接 ${dismissed} 個クリック`);
+    // ★Phase 30b (2026-06-30 HIROさん: 3回直して閉じない件): アラートの「実構造」をログ採取 + 枠内の閉じるを直接click。
+    //   旧 Phase30 は page全体の '閉じる' を文言祖先<500 で探したが実体を掴めず、 "dismissed 3" でも閉じなかった(空振り)。
+    //   私の検証ブラウザはトリガーで毎回フリーズし生捕獲できないため、 ★HIROさんの実セッションのログで
+    //   本物の閉じるボタンの正体(tag/class/text)を記録★ し、 次で精密に直す。 同時に枠内の閉じるを狙ってclickも試す。
+    //   ※dismissed の値に関係なく常に実行(旧 dismissed===0 ゲートだと既存の空振り3クリックで skip されていた)。
+    try {
+      const _body = document.body ? (document.body.innerText || '') : '';
+      if (/注文できる商品がございません/.test(_body)) {
+        // 文言を own-text に持つ最小要素 → クリック要素を含む祖先「枠」を特定
+        let _txtEl = null;
+        for (const e of $$('*')) {
+          const own = Array.from(e.childNodes).filter(n => n.nodeType === 3).map(n => n.textContent).join('');
+          if (own.indexOf('注文できる商品がございません') >= 0) { _txtEl = e; break; }
         }
-      } catch (_) {}
-    }
+        let _scope = _txtEl, _up = 0;
+        while (_scope && _up < 6) {
+          if (_scope.querySelectorAll && _scope.querySelectorAll('button, a, input, [role=button], [onclick]').length > 0) break;
+          _scope = _scope.parentElement; _up++;
+        }
+        _scope = _scope || _txtEl;
+        const _btns = _scope ? Array.from(_scope.querySelectorAll('button, a, input, [role=button], [onclick]')) : [];
+        // ★構造ログ(本物の閉じる特定用): 枠内クリック要素を tag.class'text'表示/非表示 で記録(URLは出さない=フィルタ回避)
+        const _desc = _btns.slice(0, 8).map(b =>
+          `${b.tagName}.${(b.className || '').toString().replace(/\s+/g, '.').slice(0,18)}'${((b.innerText || b.value || '').trim()).slice(0,10)}'${b.offsetParent !== null ? 'v' : 'h'}`
+        ).join(' ');
+        pbLog('🔎', 'popup-struct', `注文不可アラート 枠=${_scope ? _scope.tagName + '.' + (_scope.className || '').toString().slice(0,18) : '?'} btns[${_btns.length}]: ${_desc}`);
+        // ★枠内の「閉じる/✕/×/close/exit」を直接click(page全体でなく枠内に限定 → 実体に当たりやすい)
+        let _clicked = 0;
+        for (const b of _btns) {
+          const t = (b.innerText || b.value || '').trim();
+          const cl = (b.className || '').toString();
+          if (/閉じ|^✕$|^×$|close/i.test(t) || /close|exit|dismiss/i.test(cl)) { try { b.click(); _clicked++; dismissed++; } catch (_) {} }
+        }
+        if (_clicked > 0) pbLog('🗙', 'popup', `注文不可アラート: 枠内の閉じる ${_clicked} 個をclick`);
+      }
+    } catch (_) {}
     if (dismissed > 0) pbLog('🗙','popup','dismissed '+dismissed+' popup(s)');
     return dismissed;
   }
@@ -4221,7 +4239,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.32 2026-06-29 23:01 #2b5cd8 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.33 2026-06-30 00:08 #03a311 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -5959,7 +5977,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.32 2026-06-29 23:01 #2b5cd8 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.33 2026-06-30 00:08 #03a311 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -6179,7 +6197,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.32 2026-06-29 23:01 #2b5cd8 JST');
+    lines.push('🔧 build: v2.3.33 2026-06-30 00:08 #03a311 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
