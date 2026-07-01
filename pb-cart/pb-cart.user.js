@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.33 2026-06-30 00:08 #03a311 JST
+// @version      v2.3.34 2026-07-01 21:34 #2984fc JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -752,6 +752,7 @@
     'phase26',                     // ★Phase 26 1発目settle確認 (transient青の誤爆=フリーズ防止)
     'phase29',                     // ★Phase 29 在庫データ判定 (orderstock_listで在庫あり確証してから押下)
     'popup-struct',                // ★Phase 30b 注文不可アラートの実構造ログ (本物の閉じるボタン特定用)
+    'native-alert',                // ★Phase 31 ネイティブalert()横取り (抑止した文言の記録=フリーズ根治)
     'phase16',                     // ★Phase 16 本物ボタン+小窓待ち (実験の核心計測)
     'foreground',                  // ★Phase 17 表示中タブのみ稼働 (裏タブ停止/再開)
     'ui-heal',                     // ★Phase 18 FAB自己修復 (DOM差し替えで消えたFABの再注入)
@@ -4239,7 +4240,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.33 2026-06-30 00:08 #03a311 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.34 2026-07-01 21:34 #2984fc JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -5977,7 +5978,30 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.33 2026-06-30 00:08 #03a311 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.34 2026-07-01 21:34 #2984fc JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+
+    // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
+    //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
+    //   「大変混み合っているため…」等は DOM モーダルではなく iOS Safari の★ネイティブ alert()★。
+    //   btn.click() で発火 → JS を同期ブロック(=フリーズ)・画面最上部に表示・DOM に無いので閉じるボタンを
+    //   掴めず(3回直して閉じなかった真因)・HIROさんが手動で閉じるしかなかった。
+    //   対策: alert/confirm を横取りして★ネイティブダイアログを出さず、 文言をログに記録して即続行★。
+    //   → ブロック/フリーズ/手動クローズが消え、 中身も分かる(今まで取れなかったデータ)。 サイトJSは即 return 相当で継続。
+    //   ※@grant none によりページ文脈で動くため window.alert 上書きがサイトの alert 呼出に効く。
+    try {
+      if (!window._pbDialogHooked) {
+        window._pbDialogHooked = true;
+        window.alert = function (msg) {
+          try { pbLog('🔕','native-alert',`alert抑止: ${String(msg == null ? '' : msg).slice(0,80)}`); } catch (_) {}
+          return undefined;  // ネイティブダイアログを出さない(ブロック回避)
+        };
+        window.confirm = function (msg) {
+          try { pbLog('🔕','native-alert',`confirm抑止(OK扱い): ${String(msg == null ? '' : msg).slice(0,80)}`); } catch (_) {}
+          return true;  // 予約フローを止めないよう OK 相当で続行
+        };
+        pbLog('🔕','native-alert','alert/confirm 横取り設置(ネイティブダイアログ抑止・文言ログ化)');
+      }
+    } catch (_) {}
 
     // ★Phase 13 (2026-06-05): 前回 reload() → 今回 boot の所要を計測 → ツール側 overhead を分離
     //   reloadToBoot = reload()呼出 〜 この boot。 sinceNav = ナビ開始〜boot (Akamai ページロード)。
@@ -6197,7 +6221,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.33 2026-06-30 00:08 #03a311 JST');
+    lines.push('🔧 build: v2.3.34 2026-07-01 21:34 #2984fc JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
