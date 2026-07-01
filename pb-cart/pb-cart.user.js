@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.35 2026-07-01 22:09 #195549 JST
+// @version      v2.3.36 2026-07-01 22:14 #56d4ad JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -2900,16 +2900,13 @@
         atDS.reloads = (atDS.reloads || 0) + 1;
         sDS.productAttempts[target.id] = atDS;
         saveState(sDS);
-        // ★Phase 29b (2026-06-27 HIROさん指摘): 在庫切れ監視のリロード間隔を人らしくランダム化(既定1〜4秒)。
-        //   理由(6-27ログ): Phase29で「10押し→reload」を撤去し裸の高速リロード(<1秒の塊が51%)になった → bot材料の懸念。
-        //   proven(6-11/4確保・BANなし)分布の 1-4秒帯(全体の~41%が該当)に合わせ、<1秒の連続を排除。
-        //   ★在庫あり(○/△)検知は別経路で即押下=ゆらぎ無し(攻めの速さは不変)。 ここは在庫切れ/データ未取得の監視のみ。
-        const _rmin = (cfg.options || {}).stock_recheck_min_ms || 1000;
-        const _rmax = (cfg.options || {}).stock_recheck_max_ms || 4000;
-        const _rwait = Math.round(_rmin + Math.random() * Math.max(0, _rmax - _rmin));
-        updateUI({ status: _sj.ready ? `🔍 在庫無し(${_sj.mark}) → ${(_rwait/1000).toFixed(1)}秒後に再確認` : '🔍 在庫データ待ち → リロード' });
-        pbLog('🎯','phase29',`在庫切れ監視 → ${_rwait}ms 後にリロード(人らしいゆらぎ ${_rmin}-${_rmax}ms)`);
-        if (await interruptibleSleep(_rwait)) { updateUI(); return; }
+        // ★Phase 33 (2026-07-01 HIROさん指摘): stock_recheck の1-4秒ランダムを撤去。
+        //   「人がクリックするように動けばよい。描画待ちが大事」との判断。 #buy 出現待ち(描画待ち,~1-2秒・自然変動)が
+        //   人らしい間隔・ゆらぎを担うので、 人為的な上乗せランダムは不要。 リロード前は最小sleepのみ、
+        //   間隔は次boot時の描画待ちで自然に決まる。 (Phase29bの1-4秒ジッターは廃止)
+        updateUI({ status: _sj.ready ? `🔍 在庫無し(${_sj.mark}) → 監視継続` : '🔍 在庫データ待ち → リロード' });
+        await humanSleep(timing().grey_mid_reload_sleep_ms);
+        if (loadState().paused === true) { updateUI(); return; }
         await safeReload(_sj.ready ? 'phase29-soldout' : 'phase29-no-data');
         return;
       }
@@ -4250,7 +4247,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.35 2026-07-01 22:09 #195549 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.36 2026-07-01 22:14 #56d4ad JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -5988,7 +5985,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.35 2026-07-01 22:09 #195549 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.36 2026-07-01 22:14 #56d4ad JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6236,7 +6233,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.35 2026-07-01 22:09 #195549 JST');
+    lines.push('🔧 build: v2.3.36 2026-07-01 22:14 #56d4ad JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
