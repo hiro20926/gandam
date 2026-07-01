@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.34 2026-07-01 21:34 #2984fc JST
+// @version      v2.3.35 2026-07-01 22:09 #195549 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1653,11 +1653,18 @@
   //   在庫ありの商品(リックディアス クワトロ機)で この小窓を成功誤判定し「カート確保」を4件中3件 誤報告
   //   (HIROさん 6/25 緊急指摘)。 → 成功は明確な文言のみに限定。 この曖昧文言は ERR_RE 側(非成功・小窓を閉じて継続)
   //   で扱う。 真にカート入りなら buttonState の ALREADY_IN_CART(リロード後)で別途確実に検知される。
-  const CART_ADDED_RE = /カートに商品が追加されました|カートに追加しました|カートインしました/;
+  // ★Phase 32 (2026-07-01): 予約成功アラート「✅ 商品を登録しました」を成功文言に追加。
+  //   予約商品(予約する)の成功は「商品を登録しました」(カート商品の追加とは別文言)。 これが辞書に無く、
+  //   かつ Phase 31 で native alert 抑止 → 成功を検知できず「カートに入っても止まらない」(HIROさん 7/1 指摘)。
+  const CART_ADDED_RE = /カートに商品が追加されました|カートに追加しました|カートインしました|商品を登録しました|ご予約を受け付けました|予約を受け付けました/;
   function detectCartAddedPopup() {
-    if (!document.body) return false;
-    const text = document.body.innerText || '';
-    return CART_ADDED_RE.test(text);
+    if (document.body && CART_ADDED_RE.test(document.body.innerText || '')) return true;
+    // ★Phase 32: 成功はネイティブ alert() で来て Phase 31 が抑止する場合がある → 直近の抑止alert文言も見る。
+    try {
+      const la = window._pbLastAlert;
+      if (la && (Date.now() - la.at < 4000) && CART_ADDED_RE.test(la.msg || '')) return true;
+    } catch (_) {}
+    return false;
   }
 
   // ポップアップを自動で閉じる
@@ -2125,7 +2132,10 @@
       const bs = buttonState();
       if (bs.reason === 'ALREADY_IN_CART' || bs.reason === 'LIMIT') { outcome = 'added'; break; }
       const bodyText = (document.body && document.body.innerText) || '';
-      if (ERR_RE.test(bodyText)) { outcome = 'error'; break; }
+      // ★Phase 32: エラーもネイティブ alert() で来て Phase 31 が抑止する場合がある → 直近の抑止alert文言も見る
+      let _laMsg = '';
+      try { const _la = window._pbLastAlert; if (_la && (Date.now() - _la.at < 4000)) _laMsg = _la.msg || ''; } catch (_) {}
+      if (ERR_RE.test(bodyText) || ERR_RE.test(_laMsg)) { outcome = 'error'; break; }
       // ★Phase 21b (2026-06-11): 既知文言外の小窓も取りこぼさない一般化。 クリック後に「閉じる/✕」付きの
       //   小さい小窓(Cookie同意系を除く)が出ていたら「未知のエラー小窓」 として扱う(長時間スタック防止)。
       let _unknownPopup = false;
@@ -4240,7 +4250,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.34 2026-07-01 21:34 #2984fc JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.35 2026-07-01 22:09 #195549 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -5978,7 +5988,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.34 2026-07-01 21:34 #2984fc JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.35 2026-07-01 22:09 #195549 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -5992,11 +6002,16 @@
       if (!window._pbDialogHooked) {
         window._pbDialogHooked = true;
         window.alert = function (msg) {
-          try { pbLog('🔕','native-alert',`alert抑止: ${String(msg == null ? '' : msg).slice(0,80)}`); } catch (_) {}
+          const _m = String(msg == null ? '' : msg);
+          // ★Phase 32: 抑止した文言を残す → detectCartAddedPopup / ERR 判定が「成功/エラーのネイティブalert」を拾える
+          try { window._pbLastAlert = { msg: _m, at: Date.now() }; } catch (_) {}
+          try { pbLog('🔕','native-alert',`alert抑止: ${_m.slice(0,80)}`); } catch (_) {}
           return undefined;  // ネイティブダイアログを出さない(ブロック回避)
         };
         window.confirm = function (msg) {
-          try { pbLog('🔕','native-alert',`confirm抑止(OK扱い): ${String(msg == null ? '' : msg).slice(0,80)}`); } catch (_) {}
+          const _m = String(msg == null ? '' : msg);
+          try { window._pbLastAlert = { msg: _m, at: Date.now() }; } catch (_) {}
+          try { pbLog('🔕','native-alert',`confirm抑止(OK扱い): ${_m.slice(0,80)}`); } catch (_) {}
           return true;  // 予約フローを止めないよう OK 相当で続行
         };
         pbLog('🔕','native-alert','alert/confirm 横取り設置(ネイティブダイアログ抑止・文言ログ化)');
@@ -6221,7 +6236,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.34 2026-07-01 21:34 #2984fc JST');
+    lines.push('🔧 build: v2.3.35 2026-07-01 22:09 #195549 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
