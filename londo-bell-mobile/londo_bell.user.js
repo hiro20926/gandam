@@ -1670,11 +1670,15 @@
             pointer-events: auto;
           }
           /* bottom sheet 本体（オーバーレイより上） */
+          /* rev17.1: HIROさんが「真ん中すぎて上半分のダイアログの『はい』が押せない」
+             と発見。高さを 75vh → 55vh に下げて、上半分の GUNDAM BASE ページ側 UI
+             （キャンセル確認ダイアログ等）にアクセスできるようにする。
+             フォーム項目はスクロールで対応（body の overflow-y: auto は既存）。*/
           .__lb_sheet {
             position: fixed;
             left: 0; right: 0; bottom: 0;
-            height: 75vh;
-            max-height: 700px;
+            height: 55vh;
+            max-height: 500px;
             background: linear-gradient(180deg, #0a1228 0%, #060d1a 100%);
             border-radius: 16px 16px 0 0;
             z-index: 2147483641;
