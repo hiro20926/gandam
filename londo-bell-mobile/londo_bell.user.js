@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LONDO BELL Mobile
 // @namespace    londo-bell-mobile
-// @version      1.1.1-202607052041
-// @description  GUNDAM BASE 入店事前抽選 自動申込 (安定版 v1.1)  [BUILD 2026-07-05 20:41 JST]
+// @version      1.1.202607052057
+// @description  GUNDAM BASE 入店事前抽選 自動申込 (安定版 v1.1)  [BUILD 2026-07-05 20:57 JST]
 // @match        https://www.gundam-base-entry.net/*
 // @match        https://gundam-base-entry.net/*
 // @run-at       document-end
