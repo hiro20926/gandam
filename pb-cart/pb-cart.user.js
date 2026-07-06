@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.36 2026-07-01 22:14 #56d4ad JST
+// @version      v2.3.38 2026-07-06 21:50 #198512 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -753,6 +753,7 @@
     'phase29',                     // ★Phase 29 在庫データ判定 (orderstock_listで在庫あり確証してから押下)
     'popup-struct',                // ★Phase 30b 注文不可アラートの実構造ログ (本物の閉じるボタン特定用)
     'native-alert',                // ★Phase 31 ネイティブalert()横取り (抑止した文言の記録=フリーズ根治)
+    'settings-open',               // ★2026-07-06 設定描画時間の計測(数秒フリーズの原因究明)
     'phase16',                     // ★Phase 16 本物ボタン+小窓待ち (実験の核心計測)
     'foreground',                  // ★Phase 17 表示中タブのみ稼働 (裏タブ停止/再開)
     'ui-heal',                     // ★Phase 18 FAB自己修復 (DOM差し替えで消えたFABの再注入)
@@ -1136,6 +1137,10 @@
         realbutton_retry: true,
         // ★Phase 21: 本物ボタン反応駆動の押下間隔(小窓を閉じ切った後にあける人間間隔)。 HIROさん指定 0.5秒。
         realbtn_press_gap_ms: 500,
+        // ★2026-07-06 (4fix-④ HIROさん): 嫌がらせポップアップを閉じた後、 青ボタンの活性復帰をこの時間だけ待つ。
+        //   混雑/一瞬グレーではリロードせず青の復帰を待って押す。 確定在庫切れ(×)の時だけ即リロード。
+        blue_wait_ms: 1500,
+        grey_recheck_gap_ms: 400,
         // 小窓が出るまで待つ上限(=死んだページ救出のみ)。 遅いだけの応答はこの範囲で待ち切る。
         //   90秒 完全沈黙 = "遅い"ではなく"壊れている" と判断してリロード (HIROさん指定)。
         realbutton_popup_wait_ms: 90000,
@@ -1676,9 +1681,13 @@
     let dismissed = 0;
     const SUCCESS_WORDS = /カートに商品が追加されました|カートに追加しました|カートインしました/;
     // keepSuccess=true なら成功ポップアップは閉じない
+    // ★2026-07-06 (4fix-③ HIROさん): サーバの嫌がらせポップアップ文言を辞書に追加。
+    //   スクショの「商品数変更が出来ない」「カートに入れることが出来ませんでした」「(ご希望)個数に不足」等が
+    //   旧辞書に無く、 閉じる対象として認識されず放置 → カートインの阻害になっていた。
+    const _HARASS = '大変混み合っているため|在庫がございません|追加できません|エラーが発生|注文できる商品がございません|販売(を|が)?終了|受付(を|が)?終了|完売|商品数変更が出来ない|変更が出来ない商品|個数に不足|カートに入れることが出来|カートに入れることができ|ご指定の商品をカート';
     const TRIGGER_WORDS = opts.keepSuccess
-      ? /大変混み合っているため|在庫がございません|追加できません|エラーが発生|注文できる商品がございません|販売(を|が)?終了|受付(を|が)?終了|完売/
-      : /大変混み合っているため|在庫がございません|追加できません|エラーが発生|注文できる商品がございません|販売(を|が)?終了|受付(を|が)?終了|完売|カートに商品が追加されました|カートに追加しました/;
+      ? new RegExp(_HARASS)
+      : new RegExp(_HARASS + '|カートに商品が追加されました|カートに追加しました');
     // 1. 「閉じる」「✕」「×」テキストを持つボタン
     const closeCandidates = $$('button, a, span, div').filter(e => {
       const t = (e.innerText || '').trim();
@@ -1715,12 +1724,15 @@
     //   ※dismissed の値に関係なく常に実行(旧 dismissed===0 ゲートだと既存の空振り3クリックで skip されていた)。
     try {
       const _body = document.body ? (document.body.innerText || '') : '';
-      if (/注文できる商品がございません/.test(_body)) {
+      // ★2026-07-06 (4fix-③): 枠内の閉じる(×)を掴む対象を、 注文不可アラートだけでなく
+      //   嫌がらせ系ポップアップ全般(商品数変更不可/カートに入れられない/個数不足/混雑)に拡張。
+      const _BOXRE = /注文できる商品がございません|商品数変更が出来ない|変更が出来ない商品|カートに入れることが出来|カートに入れることができ|個数に不足|ご指定の商品をカート|大変混み合っているため/;
+      if (_BOXRE.test(_body)) {
         // 文言を own-text に持つ最小要素 → クリック要素を含む祖先「枠」を特定
         let _txtEl = null;
         for (const e of $$('*')) {
           const own = Array.from(e.childNodes).filter(n => n.nodeType === 3).map(n => n.textContent).join('');
-          if (own.indexOf('注文できる商品がございません') >= 0) { _txtEl = e; break; }
+          if (_BOXRE.test(own)) { _txtEl = e; break; }
         }
         let _scope = _txtEl, _up = 0;
         while (_scope && _up < 6) {
@@ -2996,18 +3008,31 @@
       }
       // 設定モーダル開いている間は試行も止める(編集中に勝手に投入しない)
       await waitWhileSettingsOpen('attempt-loop');
-      // ★Phase 9-3: 各 attempt 直前にも混雑メッセージガード
-      // ★Phase 9-L (2026-05-22): pbLog → pbError('warn',...) に格上げ
-      if (isSiteBusy()) {
-        pbError('warn','site-busy',`混雑メッセージ表示中 → 連打中断 (${i}/${RETRY_LIMIT})`);
-        break;
+      // ★2026-07-06 (4fix-③④ HIROさん): サーバの嫌がらせポップアップ(×/閉じる/混雑/個数不足)は
+      //   「まず閉じる → 青ボタンが活性なら押す」。 ポップアップが出ただけではリロード/中断しない。
+      //   旧仕様は isSiteBusy() で即 break していた(=混雑表示で1発しか押せずチャンスを逃す主因)→ 廃止。
+      try { dismissAnyPopup(); } catch (_) {}
+      // ★各試行前にボタン状態を確認、 青(clickable)のみ押す。 下の青復帰待ちで更新するため let。
+      let bs2 = buttonState();
+      // ★青が活性でない時: 確定完売(在庫データ×)なら諦めてリロード(Phase29フリーズ防止)。
+      //   それ以外(混雑/一瞬グレー)は「嫌がらせを閉じて青の復帰を短時間待つ」→ 復帰したら押す。
+      if (!bs2.clickable && bs2.reason !== 'ALREADY_IN_CART' && bs2.reason !== 'LIMIT') {
+        let _sjNow = null; try { _sjNow = (typeof stockJudge === 'function') ? stockJudge() : null; } catch (_) {}
+        if (!(_sjNow && _sjNow.soldOut)) {
+          const _blueWaitMs = (cfg.options || {}).blue_wait_ms || 1500;
+          const _bw0 = Date.now();
+          while (Date.now() - _bw0 < _blueWaitMs) {
+            if (loadState().paused === true) { updateUI(); return; }
+            try { dismissAnyPopup(); } catch (_) {}
+            await sleep(150);
+            bs2 = buttonState();
+            if (bs2.clickable) break;
+            let _sj2 = null; try { _sj2 = (typeof stockJudge === 'function') ? stockJudge() : null; } catch (_) {}
+            if (_sj2 && _sj2.soldOut) break;   // 途中で×確定 → 抜けてリロード判定へ
+          }
+          if (bs2.clickable) pbLog('🔵','button',`嫌がらせ閉じ後に青が復帰 → 押下 (${i+1}/${RETRY_LIMIT})`);
+        }
       }
-      // ★各試行前にボタン状態を確認、 青のみ POST (2026-05-12 Phase 9-0' BAN リスクを受けて改訂)
-      //   旧仕様: i=0 は強制 POST (force_first_attempt_post=true デフォルト)
-      //   新仕様: 全 i で buttonState() を信頼、 青のみ POST、 grey なら break
-      //   理由: grey ボタンへの POST は「ボタン状態を無視する bot」 と判定される BAN 主因
-      //        attempt loop 自体が「青を待つ」 機構 — 最大 10 回まで青を見て連打可
-      const bs2 = buttonState();
       if (!bs2.clickable) {
         // ★ログ表現: 1回目で grey 検知のケースは「試行 0」 と区別して表示
         if (i === 0) {
@@ -3065,6 +3090,17 @@
               updateUI({ status: '✅ カート確保 — 決済を待つ' });
             }
             return;
+          }
+        }
+        // ★2026-07-06 (4fix-④ HIROさん): 確定完売(在庫データ×)でなく、 まだ10回に達していないなら
+        //   リロードせず次の押下チャンス(青の復帰)を待つ。 混雑/一瞬グレーでチャンスを捨てない。
+        {
+          let _sjG = null; try { _sjG = (typeof stockJudge === 'function') ? stockJudge() : null; } catch (_) {}
+          if (!(_sjG && _sjG.soldOut) && i < RETRY_LIMIT - 1) {
+            pbLog('🔵','attempt',`grey(混雑/一瞬)・完売×ではない → リロードせず継続 (${i+1}/${RETRY_LIMIT})`);
+            await humanSleep((cfg.options || {}).grey_recheck_gap_ms || 400);
+            if (loadState().paused === true) { updateUI(); return; }
+            continue;
           }
         }
         // 在庫切れなど → リロード(復活待ち)
@@ -3907,7 +3943,7 @@
       #pb-fab .btn-settings { background: linear-gradient(180deg, #c9a85a 0%, #8a6f2c 100%); color: #1a1308; }
       #pb-modal {
         position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 2147483647;
-        background: rgba(0,0,0,0.92); display: none;
+        background: #000; display: none;  /* ★2026-07-06 (4fix-②): 半透明rgba(0,0,0,0.92)→不透明で背景ページの合成コストを排除(設定オープン時の数秒フリーズ対策) */
         overflow-y: auto; -webkit-overflow-scrolling: touch;
       }
       #pb-modal.open { display: block; }
@@ -4247,7 +4283,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.36 2026-07-01 22:14 #56d4ad JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.38 2026-07-06 21:50 #198512 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -4644,8 +4680,15 @@
       modal.id = 'pb-modal';
       document.body.appendChild(modal);
     }
+    // ★2026-07-06 (4fix-②): 設定を開くと数秒固まる件の計測。 描画(JS)の同期時間をログ化。
+    //   JS が速ければ freeze はブラウザのレイアウト/合成コスト(→ 背景を #000 不透明にして背後ページの合成を停止)。
+    const _t0 = (window.performance && performance.now) ? performance.now() : Date.now();
     renderSettingsModal(modal);
     modal.classList.add('open');
+    try {
+      const _dt = ((window.performance && performance.now) ? performance.now() : Date.now()) - _t0;
+      pbLog('⏱','settings-open',`設定描画 ${Math.round(_dt)}ms (商品${loadConfig().products.length}件)`);
+    } catch (_) {}
   }
   function closeSettingsModal() {
     const m = $('#pb-modal');
@@ -5985,7 +6028,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.36 2026-07-01 22:14 #56d4ad JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.38 2026-07-06 21:50 #198512 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6233,7 +6276,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.36 2026-07-01 22:14 #56d4ad JST');
+    lines.push('🔧 build: v2.3.38 2026-07-06 21:50 #198512 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
