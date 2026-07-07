@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.39 2026-07-07 20:23 #6818dc JST
+// @version      v2.3.40 2026-07-07 22:02 #8da797 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -522,6 +522,25 @@
           await sleep(waitMs);
         }
       }
+      // ★2026-07-07 (人間リロード間隔 / HIROさん「カート無効化=リロードが速すぎ」):
+      //   前回リロードから最低 human target(既定3.0-5.5秒, ランダム揺らぎ付き)空ける。 BotManager に
+      //   「2.5秒台/1秒未満連発」の機械的リズムを読ませない。 描画待ちで既に空いていれば追加待ちゼロ=遅くならない。
+      try {
+        const _opts = (loadConfig().options || {});
+        const _hMin = _opts.human_reload_min_ms != null ? _opts.human_reload_min_ms : 3000;
+        const _hJit = _opts.human_reload_jitter_ms != null ? _opts.human_reload_jitter_ms : 2500;
+        const _lastReload = hist.length ? hist[hist.length - 1] : 0;
+        if (_lastReload && _hMin > 0) {
+          const _sinceLast = Date.now() - _lastReload;
+          const _target = _hMin + Math.random() * _hJit;
+          if (_sinceLast < _target) {
+            const _wait = Math.round(_target - _sinceLast);
+            try { pbLog('🚶','human-reload',`人間リロード間隔: 前回から${_sinceLast}ms → +${_wait}ms待機(目標${Math.round(_target)}ms, label=${label||''})`); } catch(_){}
+            try { updateUI({ status: `🚶 人間ペース待機 ${(_wait/1000).toFixed(1)}秒 → リロード` }); } catch(_){}
+            if (await interruptibleSleep(_wait)) { return; }  // 停止押下で中断(リロードしない)
+          }
+        }
+      } catch (_) {}
       // 履歴に今回の reload を追加
       hist.push(Date.now());
       _saveReloadHist(hist);
@@ -754,6 +773,7 @@
     'popup-struct',                // ★Phase 30b 注文不可アラートの実構造ログ (本物の閉じるボタン特定用)
     'native-alert',                // ★Phase 31 ネイティブalert()横取り (抑止した文言の記録=フリーズ根治)
     'settings-open',               // ★2026-07-06 設定描画時間の計測(数秒フリーズの原因究明)
+    'human-reload',                // ★2026-07-07 人間リロード間隔(BotManager絞り/カート無効化回避)
     'phase16',                     // ★Phase 16 本物ボタン+小窓待ち (実験の核心計測)
     'foreground',                  // ★Phase 17 表示中タブのみ稼働 (裏タブ停止/再開)
     'ui-heal',                     // ★Phase 18 FAB自己修復 (DOM差し替えで消えたFABの再注入)
@@ -1144,6 +1164,11 @@
         // ★2026-07-07 (二重カートイン修正): 押下後、 曖昧な小窓が出ても「カートに商品が追加されました」の
         //   描画をこの時間だけ待ってから error 断定する。 成功小窓の閉じるボタン先行描画による誤判定→二重を防ぐ。
         added_popup_grace_ms: 700,
+        // ★2026-07-07 (人間リロード間隔 / HIROさん「カート無効化=リロードが速すぎ」): 前回リロードから
+        //   最低 human_reload_min_ms + 0〜human_reload_jitter_ms(=3.0〜5.5秒)空ける。 機械的リズムでBotManagerに
+        //   弾かれるのを防ぐ。 描画待ちで既に空いていれば追加待ち無し=遅くならない。 0にすると無効化。
+        human_reload_min_ms: 3000,
+        human_reload_jitter_ms: 2500,
         // 小窓が出るまで待つ上限(=死んだページ救出のみ)。 遅いだけの応答はこの範囲で待ち切る。
         //   90秒 完全沈黙 = "遅い"ではなく"壊れている" と判断してリロード (HIROさん指定)。
         realbutton_popup_wait_ms: 90000,
@@ -4319,7 +4344,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.39 2026-07-07 20:23 #6818dc JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.40 2026-07-07 22:02 #8da797 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -6064,7 +6089,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.39 2026-07-07 20:23 #6818dc JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.40 2026-07-07 22:02 #8da797 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6160,7 +6185,7 @@
       const cfgEarly = loadConfig();
       const cartCheck = isCartNonEmpty();
       // カート確認は async なので発火後に判断
-      cartCheck.then((nonEmpty) => {
+      cartCheck.then(async (nonEmpty) => {
         if (cfgEarly.options && cfgEarly.options.auto_nuke_when_empty && !nonEmpty) {
           const state = loadState();
           state.accessControlStreak = (state.accessControlStreak || 0) + 1;
@@ -6171,7 +6196,9 @@
             nukeAllSiteData();
           }
         }
-        setTimeout(() => location.reload(), 300);
+        // ★2026-07-07 (HIROさん「リロードが速すぎてカート無効化/Access Denied」): アクセス制御ページでの
+        //   300ms即リロードは BotManager の絞りを悪化させ、 弾かれ続ける主因。 人間ペースの safeReload に変更。
+        await safeReload('boot-access-control');
       });
       return;
     }
@@ -6312,7 +6339,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.39 2026-07-07 20:23 #6818dc JST');
+    lines.push('🔧 build: v2.3.40 2026-07-07 22:02 #8da797 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
