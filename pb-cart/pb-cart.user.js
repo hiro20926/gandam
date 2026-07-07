@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.41 2026-07-07 22:08 #6bc707 JST
+// @version      v2.3.42 2026-07-07 22:20 #941de6 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1164,6 +1164,11 @@
         // ★2026-07-07 (二重カートイン修正): 押下後、 曖昧な小窓が出ても「カートに商品が追加されました」の
         //   描画をこの時間だけ待ってから error 断定する。 成功小窓の閉じるボタン先行描画による誤判定→二重を防ぐ。
         added_popup_grace_ms: 700,
+        // ★2026-07-07 (HIROさん「人が触れる部分だけで判定・背後の/cart/裏フェッチ廃止」):
+        //   false=監視ホットループで /cart/ 裏フェッチをしない。 成功は"見える"ポップアップ「カートに商品が
+        //   追加されました」＋再ロード後の ALREADY_IN_CART(見えるボタン)で判定。 サーバから見える無駄GETを消す。
+        //   true=旧動作(件数増検知/二重確認/ポップアップ再照合で /cart/ を叩く)。
+        background_cart_check: false,
         // ★2026-07-07 (人間リロード間隔 / HIROさん「カート無効化=リロードが速すぎ」): 前回リロードから
         //   最低 human_reload_min_ms + 0〜human_reload_jitter_ms(=1.5〜2.5秒)空ける。 サブ秒の機械的連発だけ潰す。
         //   描画待ちで既に空いていれば追加待ち無し=遅くならない。 0にすると無効化。
@@ -2174,6 +2179,7 @@
     //   さらに猶予切れ時は「個数不足」等でテキスト無しに入る場合に備え、再押下の前に実カートを1回確認。
     const CLEAR_ERR_RE = /大変混み合っているため|在庫がございません|注文できる商品がございません|販売(を|が)?終了|受付(を|が)?終了|完売/;
     const _graceMs = (loadConfig().options || {}).added_popup_grace_ms || 700;
+    const _bgCartCheck = (loadConfig().options || {}).background_cart_check === true;
     let _ambigSince = 0;
     while (Date.now() - t0 < cap) {
       if (loadState().paused === true) return _mk('PAUSED', { detail: 'realbtn-paused' });
@@ -2204,22 +2210,24 @@
       if (_isErrLike) {
         if (!_ambigSince) _ambigSince = Date.now();
         if (Date.now() - _ambigSince >= _graceMs) {
-          // ★猶予切れ: 成功小窓は出なかった。 再押下(=二重)の前に実カートを1回だけ確認。
-          //   target の order ID が実カートにあれば「もう入っている」→ SUCCESS で停止(二重防止)。
-          //   カートに無ければ本当に未追加 → error(再押下=②③④の粘り継続)。 空カートでの誤判定も防げる。
-          try {
-            const _cf = findCartFormOnPage();
-            const _oi = _cf ? _cf.querySelector('input[name="order"]') : null;
-            const _oid = _oi ? _oi.value : null;
-            if (_oid) {
-              const _cart = await getCartItemIds();
-              if (_cart && _cart.ids && _cart.ids.includes(_oid)) {
-                const _tt = Date.now() - t0;
-                pbLog('✅','attempt',`エラー小窓だが実カートに商品あり → SUCCESS扱いで停止(二重防止) order=${_oid}`);
-                return { result: 'SUCCESS', newOrderIds: [_oid], afterIds: _cart.ids, timings: { post:_tt, body:0, decode:0, cartFetch:0, total:_tt }, detail: `realbtn-verified-in-cart(待ち${_tt}ms)` };
+          // ★猶予切れ: 成功小窓「カートに商品が追加されました」は出なかった → error(再押下)。
+          //   ★background_cart_check=true の時だけ再押下前に実カート確認して二重を防ぐ(=/cart/裏フェッチ)。
+          //     false(既定)は裏フェッチせず error(見える判定のみ)。 二重は成功小窓待ち(_graceMs)で防ぐ。
+          if (_bgCartCheck) {
+            try {
+              const _cf = findCartFormOnPage();
+              const _oi = _cf ? _cf.querySelector('input[name="order"]') : null;
+              const _oid = _oi ? _oi.value : null;
+              if (_oid) {
+                const _cart = await getCartItemIds();
+                if (_cart && _cart.ids && _cart.ids.includes(_oid)) {
+                  const _tt = Date.now() - t0;
+                  pbLog('✅','attempt',`エラー小窓だが実カートに商品あり → SUCCESS扱いで停止(二重防止) order=${_oid}`);
+                  return { result: 'SUCCESS', newOrderIds: [_oid], afterIds: _cart.ids, timings: { post:_tt, body:0, decode:0, cartFetch:0, total:_tt }, detail: `realbtn-verified-in-cart(待ち${_tt}ms)` };
+                }
               }
-            }
-          } catch (_) {}
+            } catch (_) {}
+          }
           outcome = 'error'; break;
         }
         // 猶予内 → 継続(次ループで detectCartAddedPopup=追加されました を見張り続ける)
@@ -3125,7 +3133,9 @@
           return;
         }
         // STOCK_OUT 等 → カート件数を確認(成功検知のフォールバック)
-        const after = await getCartItemIds();
+        //   ★background_cart_check=false(既定)は /cart/ 裏フェッチをしない → 件数増検知スキップ。
+        //     成功は次boot後の ALREADY_IN_CART(見えるボタン)で確実に拾えるのでフォールバック不要。
+        const after = ((cfg.options || {}).background_cart_check === true) ? await getCartItemIds() : { ids: null };
         if (after.ids && after.ids.length > knownCartIds.length) {
           const newIds = after.ids.filter((x) => !knownCartIds.includes(x));
           // ★target の order ID を取得して照合(keepalive 等の並行追加と区別)
@@ -3251,24 +3261,29 @@
         await safeReload('realbtn-dead-page');
         return;
       }
-      // カートイン成功ポップアップ検知(件数比較で SUCCESS 取れなかった時のフォールバック)
+      // カートイン成功ポップアップ検知(realButtonの'added'で拾えなかった時のフォールバック)
       if (r.result !== 'SUCCESS' && detectCartAddedPopup()) {
-        // ★target の order ID で照合 → 並行追加(keepalive等)による誤検知を防ぐ
         const cfPop = findCartFormOnPage();
         const oiPop = cfPop ? cfPop.querySelector('input[name="order"]') : null;
         const expectedOrderId = oiPop ? oiPop.value : null;
-        const recheck = await getCartItemIds();
-        const newIds = (recheck.ids || []).filter(x => !knownCartIds.includes(x));
-        // ★expectedOrderId が空文字/null なら誤通知防止のため抑止
-        const isRealSuccess = expectedOrderId && newIds.includes(expectedOrderId);
-        if (newIds.length > 0 && isRealSuccess) {
-          pbLog('✅','popup','カートイン成功ポップアップ検知 → SUCCESS扱い(target order一致)');
+        if ((cfg.options || {}).background_cart_check === true) {
+          // ★旧: /cart/ 裏フェッチで target order を照合(並行追加の誤検知防止)
+          const recheck = await getCartItemIds();
+          const newIds = (recheck.ids || []).filter(x => !knownCartIds.includes(x));
+          const isRealSuccess = expectedOrderId && newIds.includes(expectedOrderId);
+          if (newIds.length > 0 && isRealSuccess) {
+            pbLog('✅','popup','カートイン成功ポップアップ検知 → SUCCESS扱い(target order一致)');
+            r.result = 'SUCCESS'; r.newOrderIds = newIds; knownCartIds = recheck.ids || knownCartIds;
+          } else if (newIds.length > 0) {
+            pbLog('🛒','popup',`成功ポップアップ検知(対象とは異なる order=${expectedOrderId||'(空)'})→ 監視継続`);
+            knownCartIds = recheck.ids || knownCartIds;
+          }
+        } else {
+          // ★background_cart_check=false(既定): 見える成功ポップアップを信頼(/cart/フェッチ無し)。
+          //   target のページに居るので order は form から取得。 keepalive 既定OFFで並行追加も無い。
+          pbLog('✅','popup','成功ポップアップ検知 → SUCCESS扱い(見える判定・/cart/フェッチ無し)');
           r.result = 'SUCCESS';
-          r.newOrderIds = newIds;
-          knownCartIds = recheck.ids || knownCartIds;
-        } else if (newIds.length > 0) {
-          pbLog('🛒','popup',`成功ポップアップ検知(対象とは異なる order=${expectedOrderId||'(空)'})→ 監視継続(既存カート維持)`);
-          knownCartIds = recheck.ids || knownCartIds;  // 次試行用に更新
+          r.newOrderIds = expectedOrderId ? [expectedOrderId] : [];
         }
       }
       // ポップアップ自動クローズ(エラー/成功どちらも常に閉じる)
@@ -4345,7 +4360,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.41 2026-07-07 22:08 #6bc707 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.42 2026-07-07 22:20 #941de6 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -6090,7 +6105,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.41 2026-07-07 22:08 #6bc707 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.42 2026-07-07 22:20 #941de6 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6340,7 +6355,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.41 2026-07-07 22:08 #6bc707 JST');
+    lines.push('🔧 build: v2.3.42 2026-07-07 22:20 #941de6 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
