@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.43 2026-07-07 22:35 #61ad8c JST
+// @version      v2.3.44 2026-07-08 05:41 #456a94 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -3172,6 +3172,18 @@
             s3.productAttempts[target.id] = { reloads: 0 };
             s3.lastSuccessAt = Date.now();
             saveState(s3);
+            // ★2026-07-08 (二重カートイン修正 HIROさん): この経路だけ acquired=true を立てていなかった。
+            //   → boot の state自動修復(acquired=false の doneId を削除)で確保記録が消え、 再監視→再追加(二重)。
+            //   他の成功パスと揃えて config にも acquired=true を立てる(7/8 デナンで確認)。
+            {
+              const cCI = loadConfig();
+              const idxCI = cCI.products.findIndex(p => p.id === target.id);
+              if (idxCI >= 0 && !cCI.products[idxCI].acquired) {
+                cCI.products[idxCI].acquired = true;
+                saveConfig(cCI);
+                pbLog('✅','main',`acquired=true 自動ON(件数増検知): ${effectiveName(target)}`);
+              }
+            }
             await notifyCartSuccess(target, newIds);
             if (psa === 'stop') {
               pauseToolWithReason('count-increase');
@@ -4376,7 +4388,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.43 2026-07-07 22:35 #61ad8c JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.44 2026-07-08 05:41 #456a94 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -6121,7 +6133,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.43 2026-07-07 22:35 #61ad8c JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.44 2026-07-08 05:41 #456a94 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6241,11 +6253,12 @@
     // ★起動時 state 自動修復(壊れた doneIds を直す)
     {
       const validIds = new Set(cfg.products.map(p => p.id));
-      const acquiredSet = new Set(cfg.products.filter(p => p.acquired).map(p => p.id));
       const before = state.doneIds.length;
-      // 重複除去 + 設定にないIDを除去 + acquired=false のIDを除去
-      state.doneIds = Array.from(new Set(state.doneIds))
-        .filter(x => validIds.has(x) && acquiredSet.has(x));
+      // ★2026-07-08 (二重カートイン修正): 重複除去 + 設定にないIDのみ除去。
+      //   旧は「acquired=false の doneId も除去」していたため、 acquired を立て損ねた成功(件数増検知)の
+      //   確保記録が boot で消え、 再監視→再追加(二重)になっていた(7/8 デナン)。 acquired=false でも確保記録は保持。
+      //   (手動「カートイン済一括解除」は doneIds を直接空にするのでこの緩和と両立する)
+      state.doneIds = Array.from(new Set(state.doneIds)).filter(x => validIds.has(x));
       if (state.doneIds.length !== before) {
         pbLog('🔄','boot',`state自動修復: doneIds ${before}→${state.doneIds.length}`);
         saveState(state);
@@ -6371,7 +6384,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.43 2026-07-07 22:35 #61ad8c JST');
+    lines.push('🔧 build: v2.3.44 2026-07-08 05:41 #456a94 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
