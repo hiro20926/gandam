@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.38 2026-07-06 21:50 #198512 JST
+// @version      v2.3.39 2026-07-07 20:23 #6818dc JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1141,6 +1141,9 @@
         //   混雑/一瞬グレーではリロードせず青の復帰を待って押す。 確定在庫切れ(×)の時だけ即リロード。
         blue_wait_ms: 1500,
         grey_recheck_gap_ms: 400,
+        // ★2026-07-07 (二重カートイン修正): 押下後、 曖昧な小窓が出ても「カートに商品が追加されました」の
+        //   描画をこの時間だけ待ってから error 断定する。 成功小窓の閉じるボタン先行描画による誤判定→二重を防ぐ。
+        added_popup_grace_ms: 700,
         // 小窓が出るまで待つ上限(=死んだページ救出のみ)。 遅いだけの応答はこの範囲で待ち切る。
         //   90秒 完全沈黙 = "遅い"ではなく"壊れている" と判断してリロード (HIROさん指定)。
         realbutton_popup_wait_ms: 90000,
@@ -2138,8 +2141,17 @@
     try { btn.click(); } catch (e) { return _mk('UNCONFIRMED', { detail: 'realbtn-click-err:' + e.message }); }
     // 小窓(モーダル)が出るまで待つ。 遅い応答も待ち切る。 cap 完全沈黙のみ救出
     let outcome = null; // 'added' | 'error'
+    // ★2026-07-07 (二重カートイン修正 / HIROさん案「カートに商品が追加されました で止める」):
+    //   実障害(7/7 デナン): 1発目で成功小窓の「閉じる」ボタンが先に描画され、「カートに商品が追加されました」
+    //   テキストが出る前の一瞬に「未知小窓=error」と50msで即断→再押下→2発目でもう1個追加(二重)。
+    //   対策: 明確な未追加エラー(混雑/売切れ)以外の小窓は即 error 断定せず、成功小窓の描画を _graceMs 待つ。
+    //   さらに猶予切れ時は「個数不足」等でテキスト無しに入る場合に備え、再押下の前に実カートを1回確認。
+    const CLEAR_ERR_RE = /大変混み合っているため|在庫がございません|注文できる商品がございません|販売(を|が)?終了|受付(を|が)?終了|完売/;
+    const _graceMs = (loadConfig().options || {}).added_popup_grace_ms || 700;
+    let _ambigSince = 0;
     while (Date.now() - t0 < cap) {
       if (loadState().paused === true) return _mk('PAUSED', { detail: 'realbtn-paused' });
+      // ★成功小窓「カートに商品が追加されました」= 最優先で確定・停止(HIROさん指定の停止条件)
       if (detectCartAddedPopup()) { outcome = 'added'; break; }
       const bs = buttonState();
       if (bs.reason === 'ALREADY_IN_CART' || bs.reason === 'LIMIT') { outcome = 'added'; break; }
@@ -2147,22 +2159,46 @@
       // ★Phase 32: エラーもネイティブ alert() で来て Phase 31 が抑止する場合がある → 直近の抑止alert文言も見る
       let _laMsg = '';
       try { const _la = window._pbLastAlert; if (_la && (Date.now() - _la.at < 4000)) _laMsg = _la.msg || ''; } catch (_) {}
-      if (ERR_RE.test(bodyText) || ERR_RE.test(_laMsg)) { outcome = 'error'; break; }
-      // ★Phase 21b (2026-06-11): 既知文言外の小窓も取りこぼさない一般化。 クリック後に「閉じる/✕」付きの
-      //   小さい小窓(Cookie同意系を除く)が出ていたら「未知のエラー小窓」 として扱う(長時間スタック防止)。
-      let _unknownPopup = false;
-      try {
-        const _cands = $$('button, a, span, div');
-        for (const _e of _cands) {
-          const _t = (_e.innerText || '').trim();
-          if (_t === '閉じる' || _t === '✕' || _t === '×') {
-            const _near = (((_e.closest && _e.closest('div,section,dialog,article')) || _e).innerText || '');
-            if (_near.length > 0 && _near.length < 400 && !/Cookie|クッキー|同意|consent|許可する/i.test(_near)) { _unknownPopup = true; break; }
+      // ★明確な「未追加」エラー(混雑/売切れ)は即 error(高速再試行、二重リスク無し)
+      if (CLEAR_ERR_RE.test(bodyText) || CLEAR_ERR_RE.test(_laMsg)) { outcome = 'error'; break; }
+      // ★それ以外の error文言/未知の閉じる小窓 = 曖昧 → すぐ error 断定せず成功小窓の描画を猶予待ち
+      let _isErrLike = ERR_RE.test(bodyText) || ERR_RE.test(_laMsg);
+      if (!_isErrLike) {
+        try {
+          const _cands = $$('button, a, span, div');
+          for (const _e of _cands) {
+            const _t = (_e.innerText || '').trim();
+            if (_t === '閉じる' || _t === '✕' || _t === '×') {
+              const _near = (((_e.closest && _e.closest('div,section,dialog,article')) || _e).innerText || '');
+              if (_near.length > 0 && _near.length < 400 && !/Cookie|クッキー|同意|consent|許可する/i.test(_near)) { _isErrLike = true; break; }
+            }
           }
+        } catch (_) {}
+      }
+      if (_isErrLike) {
+        if (!_ambigSince) _ambigSince = Date.now();
+        if (Date.now() - _ambigSince >= _graceMs) {
+          // ★猶予切れ: 成功小窓は出なかった。 再押下(=二重)の前に実カートを1回だけ確認。
+          //   target の order ID が実カートにあれば「もう入っている」→ SUCCESS で停止(二重防止)。
+          //   カートに無ければ本当に未追加 → error(再押下=②③④の粘り継続)。 空カートでの誤判定も防げる。
+          try {
+            const _cf = findCartFormOnPage();
+            const _oi = _cf ? _cf.querySelector('input[name="order"]') : null;
+            const _oid = _oi ? _oi.value : null;
+            if (_oid) {
+              const _cart = await getCartItemIds();
+              if (_cart && _cart.ids && _cart.ids.includes(_oid)) {
+                const _tt = Date.now() - t0;
+                pbLog('✅','attempt',`エラー小窓だが実カートに商品あり → SUCCESS扱いで停止(二重防止) order=${_oid}`);
+                return { result: 'SUCCESS', newOrderIds: [_oid], afterIds: _cart.ids, timings: { post:_tt, body:0, decode:0, cartFetch:0, total:_tt }, detail: `realbtn-verified-in-cart(待ち${_tt}ms)` };
+              }
+            }
+          } catch (_) {}
+          outcome = 'error'; break;
         }
-      } catch (_) {}
-      if (_unknownPopup) { outcome = 'error'; break; }
-      await sleep(200);
+        // 猶予内 → 継続(次ループで detectCartAddedPopup=追加されました を見張り続ける)
+      }
+      await sleep(150);
     }
     const total = Date.now() - t0;
     const timings = { post: total, body: 0, decode: 0, cartFetch: 0, total: total };
@@ -4283,7 +4319,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.38 2026-07-06 21:50 #198512 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.39 2026-07-07 20:23 #6818dc JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -6028,7 +6064,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.38 2026-07-06 21:50 #198512 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.39 2026-07-07 20:23 #6818dc JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6276,7 +6312,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.38 2026-07-06 21:50 #198512 JST');
+    lines.push('🔧 build: v2.3.39 2026-07-07 20:23 #6818dc JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
