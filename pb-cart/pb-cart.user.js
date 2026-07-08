@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.46 2026-07-09 05:51 #015f94 JST
+// @version      v2.3.47 2026-07-09 06:05 #4002df JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1172,9 +1172,10 @@
         // ★2026-07-07 (人間リロード間隔 / HIROさん「カート無効化=リロードが速すぎ」): 前回リロードから
         //   最低 human_reload_min_ms + 0〜human_reload_jitter_ms(=1.5〜2.5秒)空ける。 サブ秒の機械的連発だけ潰す。
         //   描画待ちで既に空いていれば追加待ち無し=遅くならない。 0にすると無効化。
-        //   ★HIROさん指定(2026-07-07): min1.5秒＋揺らぎ0〜1秒(速さ優先、 1秒未満連発の撲滅が主目的)。
+        //   ★HIROさん指定(2026-07-07): min1.5秒＋揺らぎ0〜1秒。 → (2026-07-09 案A): 揺らぎを0〜1.5秒に拡大＝
+        //     1.5〜3.0秒のランダム。 毎回違う不規則さを増やして機械的リズムを読まれにくくする。 下限1.5秒は死守。
         human_reload_min_ms: 1500,
-        human_reload_jitter_ms: 1000,
+        human_reload_jitter_ms: 1500,
         // 小窓が出るまで待つ上限(=死んだページ救出のみ)。 遅いだけの応答はこの範囲で待ち切る。
         //   90秒 完全沈黙 = "遅い"ではなく"壊れている" と判断してリロード (HIROさん指定)。
         realbutton_popup_wait_ms: 90000,
@@ -4384,7 +4385,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.46 2026-07-09 05:51 #015f94 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.47 2026-07-09 06:05 #4002df JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -6129,7 +6130,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.46 2026-07-09 05:51 #015f94 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.47 2026-07-09 06:05 #4002df JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6380,7 +6381,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.46 2026-07-09 05:51 #015f94 JST');
+    lines.push('🔧 build: v2.3.47 2026-07-09 06:05 #4002df JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
