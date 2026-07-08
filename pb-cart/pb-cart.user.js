@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.45 2026-07-09 05:29 #1aebea JST
+// @version      v2.3.46 2026-07-09 05:51 #015f94 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1695,7 +1695,11 @@
   // ★Phase 32 (2026-07-01): 予約成功アラート「✅ 商品を登録しました」を成功文言に追加。
   //   予約商品(予約する)の成功は「商品を登録しました」(カート商品の追加とは別文言)。 これが辞書に無く、
   //   かつ Phase 31 で native alert 抑止 → 成功を検知できず「カートに入っても止まらない」(HIROさん 7/1 指摘)。
-  const CART_ADDED_RE = /カートに商品が追加されました|カートに追加しました|カートインしました|商品を登録しました|ご予約を受け付けました|予約を受け付けました/;
+  // ★2026-07-09 (空打ち偽成功 修正 HIROさん): 「商品を登録しました」を成功辞書から除去。 これはツール自身の
+  //   "監視リスト登録"通知(コード ~4456行の alert)で、 Phase31が抑止→_pbLastAlert に残り、 登録直後の押下で
+  //   detectCartAddedPopup がヒット→偽成功(空打ち)を出していた(7/9 ケンプファー/ヤクトで確認)。
+  //   サイトの実カート成功は「カートに商品が追加されました」等。 ツール文言と衝突する語は成功判定に使わない。
+  const CART_ADDED_RE = /カートに商品が追加されました|カートに追加しました|カートインしました|ご予約を受け付けました|予約を受け付けました/;
   function detectCartAddedPopup() {
     if (document.body && CART_ADDED_RE.test(document.body.innerText || '')) return true;
     // ★Phase 32: 成功はネイティブ alert() で来て Phase 31 が抑止する場合がある → 直近の抑止alert文言も見る。
@@ -2174,6 +2178,9 @@
       timings: { post: Date.now()-t0, body:0, decode:0, cartFetch:0, total: Date.now()-t0 } }, extra || {});
     if (!btn) return _mk('UNCONFIRMED', { detail: 'realbtn-no-button' });
     // 本物ボタンを実クリック(サイト本来の add-to-cart JS を発火させる)
+    // ★2026-07-09 (空打ち偽成功 防止): 押下直前に _pbLastAlert をクリア → detectCartAddedPopup / ERR判定が
+    //   「この押下の応答」だけを見る。 押下前の古いalert(ツールの登録通知等)を成功/失敗と誤認しない。
+    try { window._pbLastAlert = null; } catch (_) {}
     try { btn.click(); } catch (e) { return _mk('UNCONFIRMED', { detail: 'realbtn-click-err:' + e.message }); }
     // 小窓(モーダル)が出るまで待つ。 遅い応答も待ち切る。 cap 完全沈黙のみ救出
     let outcome = null; // 'added' | 'error'
@@ -4377,7 +4384,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.45 2026-07-09 05:29 #1aebea JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.46 2026-07-09 05:51 #015f94 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -6122,7 +6129,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.45 2026-07-09 05:29 #1aebea JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.46 2026-07-09 05:51 #015f94 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6373,7 +6380,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.45 2026-07-09 05:29 #1aebea JST');
+    lines.push('🔧 build: v2.3.46 2026-07-09 05:51 #015f94 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
