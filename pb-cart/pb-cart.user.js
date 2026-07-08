@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.44 2026-07-08 05:41 #456a94 JST
+// @version      v2.3.45 2026-07-09 05:29 #1aebea JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1703,22 +1703,11 @@
       const la = window._pbLastAlert;
       if (la && (Date.now() - la.at < 4000) && CART_ADDED_RE.test(la.msg || '')) return true;
     } catch (_) {}
-    // ★2026-07-07 (HIROさん「カートインしても止まらない」/ 個数不足で無音追加のケース):
-    //   プレバンの add-to-cart 結果ポップアップ(.direct_cart_inner)に「カートを見る」等のカート遷移リンクが
-    //   "表示されている"= 商品はカートに入っている(個数不足で部分的に入ってもこのリンクは出る)。
-    //   → 見える判定で確保を検知(/cart/ フェッチ不要)。 真の売り切れ(注文できる商品がございません/完売)は
-    //   このリンクが出ないので除外。 7/7 デナンの popup-struct で .direct_cart_inner 内の A'カートを見る' を確認。
-    try {
-      const _pops = document.querySelectorAll('.direct_cart_inner, [class*="direct_cart"]');
-      for (const _p of _pops) {
-        const _r = _p.getClientRects && _p.getClientRects()[0];
-        if (!(_r && _r.width > 10 && _r.height > 10)) continue;  // 実際に表示されている(サイズあり)ものだけ
-        const _links = Array.from(_p.querySelectorAll('a, button')).map(b => (b.textContent || b.value || '').trim());
-        const _txt = (_p.innerText || '') + ' ' + _links.join(' ');
-        if (/注文できる商品がございません|完売|売り切れ|販売(を|が)?終了|受付(を|が)?終了/.test(_txt)) continue;  // 真の未追加は除外
-        if (_links.some(t => /カートを見る|カートへ|ご購入手続き|レジに進む|購入手続きへ/.test(t))) return true;
-      }
-    } catch (_) {}
+    // ★2026-07-08 撤回(v2.3.45): v2.3.43で入れた「.direct_cart_inner に カートを見る リンク → 成功」判定は
+    //   偽成功(空打ち)を出した。 原因: この枠は成功でもエラーでも表示され、「カートを見る」リンクは非表示でも
+    //   DOMに存在するため、 注文不可アラートの時も成功と誤判定していた(HIROさん 7/8 至急指摘)。
+    //   偽成功は「確保済み扱いで監視停止→本当のチャンスを逃す」最悪の失敗なので、 見える文言(上の CART_ADDED_RE
+    //   / 抑止alert)のみで判定する安全側に戻す。 個数不足の無音追加の確保検知は、 誤判定しない確実な方法を別途検討。
     return false;
   }
 
@@ -4388,7 +4377,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.44 2026-07-08 05:41 #456a94 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.45 2026-07-09 05:29 #1aebea JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -6133,7 +6122,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.44 2026-07-08 05:41 #456a94 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.45 2026-07-09 05:29 #1aebea JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6384,7 +6373,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.44 2026-07-08 05:41 #456a94 JST');
+    lines.push('🔧 build: v2.3.45 2026-07-09 05:29 #1aebea JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
