@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.51 2026-07-14 23:46 #f7077f JST
+// @version      v2.3.52 2026-07-14 23:59 #720b6e JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1722,11 +1722,17 @@
       const la = window._pbLastAlert;
       if (la && (Date.now() - la.at < 4000) && CART_ADDED_RE.test(la.msg || '')) return true;
     } catch (_) {}
-    // ★2026-07-08 撤回(v2.3.45): v2.3.43で入れた「.direct_cart_inner に カートを見る リンク → 成功」判定は
-    //   偽成功(空打ち)を出した。 原因: この枠は成功でもエラーでも表示され、「カートを見る」リンクは非表示でも
-    //   DOMに存在するため、 注文不可アラートの時も成功と誤判定していた(HIROさん 7/8 至急指摘)。
-    //   偽成功は「確保済み扱いで監視停止→本当のチャンスを逃す」最悪の失敗なので、 見える文言(上の CART_ADDED_RE
-    //   / 抑止alert)のみで判定する安全側に戻す。 個数不足の無音追加の確保検知は、 誤判定しない確実な方法を別途検討。
+    // ★2026-07-14 (HIROさんスクショで成功文言=「カートに商品が追加されました。」を確認):
+    //   成功モーダル(.direct_cart_inner等)の"本文テキスト"を直接読む。 body.innerText に載らない/
+    //   タイミングで拾えないケースでも成功文言を確実に検知する。
+    //   ※重要: 判定は成功"文言"(CART_ADDED_RE)であって、 v2.3.43で偽成功を出した「カートを見るボタンの有無」ではない。
+    //     成功文言はエラー(混雑/個数不足/売切れ)では出ないので、 誤判定(空打ち偽成功)しない。
+    try {
+      const _mods = document.querySelectorAll('.direct_cart_inner, [class*="direct_cart"], [role="dialog"], [class*="modal"], [class*="popup"]');
+      for (const _m of _mods) {
+        if (_m.getClientRects && _m.getClientRects().length && CART_ADDED_RE.test(_m.innerText || _m.textContent || '')) return true;
+      }
+    } catch (_) {}
     return false;
   }
 
@@ -3114,10 +3120,27 @@
       }
       // 設定モーダル開いている間は試行も止める(編集中に勝手に投入しない)
       await waitWhileSettingsOpen('attempt-loop');
+      // ★2026-07-14 (HIROさんスクショで確定): 成功小窓「カートに商品が追加されました。」は dismissAnyPopup の
+      //   閉じる対象に入っていて、 認識前に閉じられ→青(予約する)が残っているので再押下→二重&止まらない、を
+      //   起こしていた。 → 押下・閉じるより前に、 成功小窓を最優先で確認して即停止(1回目のカートインで確実に止まる)。
+      if (detectCartAddedPopup()) {
+        pbError('success','cart',`カート確保(成功小窓「カートに商品が追加されました」検知): ${effectiveName(target)}`);
+        const _s3 = loadState();
+        if (!_s3.doneIds.includes(target.id)) _s3.doneIds.push(target.id);
+        _s3.productAttempts[target.id] = { reloads: 0 };
+        _s3.lastSuccessAt = Date.now();
+        saveState(_s3);
+        const _cA = loadConfig();
+        const _iA = _cA.products.findIndex(p => p.id === target.id);
+        if (_iA >= 0 && !_cA.products[_iA].acquired) { _cA.products[_iA].acquired = true; saveConfig(_cA); pbLog('✅','main',`acquired=true 自動ON(成功小窓): ${effectiveName(target)}`); }
+        await notifyCartSuccess(target, []);
+        if (psa === 'stop') { pauseToolWithReason('added-popup'); updateUI({ status: '✅ カート確保 — 決済を待つ' }); }
+        return;
+      }
       // ★2026-07-06 (4fix-③④ HIROさん): サーバの嫌がらせポップアップ(×/閉じる/混雑/個数不足)は
       //   「まず閉じる → 青ボタンが活性なら押す」。 ポップアップが出ただけではリロード/中断しない。
-      //   旧仕様は isSiteBusy() で即 break していた(=混雑表示で1発しか押せずチャンスを逃す主因)→ 廃止。
-      try { dismissAnyPopup(); } catch (_) {}
+      //   ★2026-07-14: 成功小窓は上で処理済 → keepSuccess=true で"成功小窓は閉じない"(閉じて取りこぼす事故を防止)。
+      try { dismissAnyPopup({ keepSuccess: true }); } catch (_) {}
       // ★各試行前にボタン状態を確認、 青(clickable)のみ押す。 下の青復帰待ちで更新するため let。
       let bs2 = buttonState();
       // ★青が活性でない時: 確定完売(在庫データ×)なら諦めてリロード(Phase29フリーズ防止)。
@@ -4412,7 +4435,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.51 2026-07-14 23:46 #f7077f JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.52 2026-07-14 23:59 #720b6e JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -6157,7 +6180,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.51 2026-07-14 23:46 #f7077f JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.52 2026-07-14 23:59 #720b6e JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6408,7 +6431,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.51 2026-07-14 23:46 #f7077f JST');
+    lines.push('🔧 build: v2.3.52 2026-07-14 23:59 #720b6e JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
