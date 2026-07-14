@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.47 2026-07-09 06:05 #4002df JST
+// @version      v2.3.48 2026-07-14 22:28 #7383b5 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1156,7 +1156,10 @@
         //     false で旧 iframe 方式にフォールバック可(ただし現状の p-bandai では機能しない)。
         realbutton_retry: true,
         // ★Phase 21: 本物ボタン反応駆動の押下間隔(小窓を閉じ切った後にあける人間間隔)。 HIROさん指定 0.5秒。
-        realbtn_press_gap_ms: 500,
+        realbtn_press_gap_ms: 500,   // (旧・固定値) 下記 min/jitter でランダム化(2026-07-14)
+        // ★2026-07-14 (HIROさん): 2回目以降の押下間隔を 1〜3秒のランダムに(1回目は即押し)。 一定速度=BOT検知回避。
+        realbtn_press_gap_min_ms: 1000,
+        realbtn_press_gap_jitter_ms: 2000,
         // ★2026-07-06 (4fix-④ HIROさん): 嫌がらせポップアップを閉じた後、 青ボタンの活性復帰をこの時間だけ待つ。
         //   混雑/一瞬グレーではリロードせず青の復帰を待って押す。 確定在庫切れ(×)の時だけ即リロード。
         blue_wait_ms: 1500,
@@ -2249,18 +2252,27 @@
     }
     const total = Date.now() - t0;
     const timings = { post: total, body: 0, decode: 0, cartFetch: 0, total: total };
+    // ★2026-07-14 (HIROさん「確実にポップアップの文字を読み取って」): outcome確定時に、 実際に表示中の
+    //   ポップアップ全文(direct_cart/モーダル等)＋直近の抑止alert文言を採取して detail に残す。
+    //   → 成功/失敗の"実文言"がログに必ず出る。 個数不足の成功文言もこれで正体を掴む。
+    let _popTxt = '';
+    try {
+      const _dc = document.querySelector('.direct_cart_inner, [class*="direct_cart"], [role="dialog"], [class*="modal"]');
+      const _dcTxt = (_dc && _dc.getClientRects && _dc.getClientRects().length) ? (_dc.innerText || '') : '';
+      let _laNow = '';
+      try { const _la = window._pbLastAlert; if (_la && (Date.now() - _la.at < 6000)) _laNow = _la.msg || ''; } catch (_) {}
+      _popTxt = (_dcTxt + ' | ' + _laNow).replace(/\s+/g, ' ').trim().slice(0, 110);
+    } catch (_) {}
     if (outcome === 'added') {
-      // ★Phase 21 (2026-06-11): 成功小窓(カート追加/在庫不足で入った/ALREADY_IN_CART)が出た時点で
-      //   カート確保は確定。 getCartItemIds(p-bandai SPA 化で /cart/ も JS 描画 → 件数取得不能)に頼って
-      //   照合すると成功が UNCONFIRMED に落ち、 取りこぼして連打を続けていた。 小窓そのものを確証として SUCCESS。
+      // ★Phase 21: 成功小窓が出た時点でカート確保は確定(getCartItemIds に頼らず小窓を確証に SUCCESS)。
       const cf = findCartFormOnPage();
       const oi = cf ? cf.querySelector('input[name="order"]') : null;
       const oid = oi ? oi.value : null;
-      return { result: 'SUCCESS', newOrderIds: oid ? [oid] : [], afterIds: beforeIds, timings, detail: `realbtn-added(待ち${total}ms)` };
+      return { result: 'SUCCESS', newOrderIds: oid ? [oid] : [], afterIds: beforeIds, timings, detail: `realbtn-added(待ち${total}ms) 文言="${_popTxt}"` };
     }
     if (outcome === 'error') {
       try { dismissAnyPopup(); } catch (_) {}
-      return { result: 'UNCONFIRMED', afterIds: beforeIds, timings, detail: `realbtn-error-popup(待ち${total}ms)`, hadPopupMarker: true };
+      return { result: 'UNCONFIRMED', afterIds: beforeIds, timings, detail: `realbtn-error-popup(待ち${total}ms) 文言="${_popTxt}"`, hadPopupMarker: true };
     }
     // cap 完全沈黙 = ページが死んでいる → 呼び元でリロード救出
     return { result: 'DEAD_PAGE', afterIds: beforeIds, timings, detail: `realbtn-no-popup(沈黙${total}ms)` };
@@ -3412,8 +3424,12 @@
           await sleep(120);
         }
         if (loadState().paused === true) { updateUI(); return; }
-        const _gap = (cfg.options || {}).realbtn_press_gap_ms || 500;
-        await sleep(_gap);                            // 人間らしい間隔(0.5秒)
+        // ★2026-07-14 (HIROさん): 1回目は即押し(ここは押下"後"の間隔)、 2回目以降は 1〜3秒のランダム。
+        //   一定速度の連打=BOT検知材料なので、 押下ごとに間隔をバラす。
+        const _pgMin = (cfg.options || {}).realbtn_press_gap_min_ms || 1000;
+        const _pgJit = (cfg.options || {}).realbtn_press_gap_jitter_ms || 2000;
+        const _gap = Math.round(_pgMin + Math.random() * _pgJit);   // 既定 1000〜3000ms ランダム
+        await sleep(_gap);
         if (loadState().paused === true) { updateUI(); return; }
         if (i === 0 || (i + 1) % 3 === 0) {
           pbLog('🔁','attempt',`本物ボタン反応駆動: 小窓閉じ+${_gap}ms間隔 → 次押下 (${i+1}/${RETRY_LIMIT})`);
@@ -4385,7 +4401,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.47 2026-07-09 06:05 #4002df JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.48 2026-07-14 22:28 #7383b5 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -6130,7 +6146,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.47 2026-07-09 06:05 #4002df JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.48 2026-07-14 22:28 #7383b5 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6381,7 +6397,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.47 2026-07-09 06:05 #4002df JST');
+    lines.push('🔧 build: v2.3.48 2026-07-14 22:28 #7383b5 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
