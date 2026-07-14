@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.50 2026-07-14 23:35 #f1767f JST
+// @version      v2.3.51 2026-07-14 23:46 #f7077f JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1221,7 +1221,15 @@
         ...def, ...c,
         // ★Phase 25 (2026-06-11): 軽量ポーリングは SPA化で死亡 → 保存済みで true でも常に false に強制。
         //   監視は「実リロード+描画待ち(Phase 19)」に一本化。無駄fetch/refresh-failed churn を排除。
-        options: { ...def.options, ...(c.options || {}), lightweight_polling: false },
+        options: { ...def.options, ...(c.options || {}), lightweight_polling: false,
+          // ★2026-07-14 (HIROさん「言った値と違う/悪化」の真因): タイミング調整値は、 以前保存した設定が
+          //   既定を上書きしてコード側の変更が端末に反映されなかった(例: 保存済み min1500 が新既定2000を上書き)。
+          //   これらは常にコード既定を強制採用する(lightweight_polling と同扱い)→ リロード/押下間隔の調整が確実に効く。
+          human_reload_min_ms: def.options.human_reload_min_ms,
+          human_reload_jitter_ms: def.options.human_reload_jitter_ms,
+          realbtn_press_gap_min_ms: def.options.realbtn_press_gap_min_ms,
+          realbtn_press_gap_jitter_ms: def.options.realbtn_press_gap_jitter_ms,
+        },
         keepalive: { ...def.keepalive, ...(c.keepalive || {}) },
         notify: { ...def.notify, ...(c.notify || {}) },
         products: Array.isArray(c.products) ? c.products : [],
@@ -4404,7 +4412,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.50 2026-07-14 23:35 #f1767f JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.51 2026-07-14 23:46 #f7077f JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -6149,7 +6157,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.50 2026-07-14 23:35 #f1767f JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.51 2026-07-14 23:46 #f7077f JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6400,7 +6408,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.50 2026-07-14 23:35 #f1767f JST');
+    lines.push('🔧 build: v2.3.51 2026-07-14 23:46 #f7077f JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
