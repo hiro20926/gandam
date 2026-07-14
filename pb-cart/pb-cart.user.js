@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.49 2026-07-14 22:33 #61f2e2 JST
+// @version      v2.3.50 2026-07-14 23:35 #f1767f JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -532,10 +532,13 @@
         const _lastReload = hist.length ? hist[hist.length - 1] : 0;
         if (_lastReload && _hMin > 0) {
           const _sinceLast = Date.now() - _lastReload;
-          const _target = _hMin + Math.random() * _hJit;
-          if (_sinceLast < _target) {
-            const _wait = Math.round(_target - _sinceLast);
-            try { pbLog('🚶','human-reload',`人間リロード間隔: 前回から${_sinceLast}ms → +${_wait}ms待機(目標${Math.round(_target)}ms, label=${label||''})`); } catch(_){}
+          // ★2026-07-14 (HIROさん「一定間隔になる時間がある」修正): 旧は「ランダム目標まで pad」方式だったため、
+          //   ページの1周(描画待ち~1.1秒+boot~0.6秒+押下)が目標を上回る区間では待機ゼロ→間隔がページ周期に
+          //   張り付いて一定化していた。 新: 経過(or下限)の"上"に毎回ランダム量を必ず加える=常にランダム成分が乗る。
+          const _base = Math.max(_sinceLast, _hMin);
+          const _wait = Math.round((_base - _sinceLast) + Math.random() * _hJit);   // = max(0,_hMin-経過) + ランダム(必ず>0)
+          if (_wait > 0) {
+            try { pbLog('🚶','human-reload',`人間リロード間隔: 前回から${_sinceLast}ms → +${_wait}ms待機(基準${Math.round(_base)}ms+乱, label=${label||''})`); } catch(_){}
             try { updateUI({ status: `🚶 人間ペース待機 ${(_wait/1000).toFixed(1)}秒 → リロード` }); } catch(_){}
             if (await interruptibleSleep(_wait)) { return; }  // 停止押下で中断(リロードしない)
           }
@@ -4401,7 +4404,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.49 2026-07-14 22:33 #61f2e2 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.50 2026-07-14 23:35 #f1767f JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -6146,7 +6149,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.49 2026-07-14 22:33 #61f2e2 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.50 2026-07-14 23:35 #f1767f JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6397,7 +6400,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.49 2026-07-14 22:33 #61f2e2 JST');
+    lines.push('🔧 build: v2.3.50 2026-07-14 23:35 #f1767f JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
