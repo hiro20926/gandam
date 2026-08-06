@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.3.9.6
+// @version      0.3.9.7
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3297,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.3.9.6';
+    const SCRIPT_VERSION = '0.3.9.7';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -12444,13 +12444,34 @@
         if (isStopped()) return;
 
         if (!proceedBtn) {
-            // ★v0.1.16.8: cart の「レジに進む」未検出は error (Discord push)
-            try {
-                logAm('error', 'cart', '「レジに進む」ボタン未検出 → 停止');
-            } catch (e) {}
+            // ★v0.3.9.7: 「レジに進む」ボタン未検出でも停止しない(HIRO 要望 2026-08-06)。
+            //   Amazon カート UI(特にモバイル /gp/aw/c)が変わりボタンセレクタが外れても、
+            //   カートに商品があれば buildDirectCheckoutUrl()(cookie の session-id/x-main ベース・
+            //   UA非依存)で /checkout/entry/cart?proceedToCheckout=1... へ直接 navigate し購入手続きを続行。
+            //   実サイト確認(2026-08-06): PC版は input[name=proceedToRetailCheckout] 健在=モバイル固有の変化。
+            //   実botはログイン済のため x-main が揃い buildDirectCheckoutUrl は成立する。
+            const _bodyNow = (document.body && document.body.innerText) || '';
+            const _emptyCart = /Amazonのカートは空|カートは空です|カートに商品がありません|is empty/i.test(_bodyNow);
+            if (!_emptyCart) {
+                let _directUrl = null;
+                try { _directUrl = buildDirectCheckoutUrl(); } catch (e) {}
+                if (_directUrl) {
+                    try { logAm('warn', 'cart',
+                        '「レジに進む」ボタン未検出 → buildDirectCheckoutUrl で直接 checkout へ navigate(停止せず購入手続き続行)'); } catch (e) {}
+                    toast('▶ 「レジに進む」未検出 → 直接 checkout へ(自動継続)', BUY_GREEN, 4000);
+                    try { setState(ST_CHECKOUT); } catch (e) {}
+                    location.href = _directUrl;
+                    return;
+                }
+                // buildDirectCheckoutUrl が null(session cookie 取得不可=セッション異常)→ 無理に進めず停止
+                try { logAm('error', 'cart',
+                    '「レジに進む」未検出・directUrl 生成不可(session cookie 無し)→ 停止'); } catch (e) {}
+            } else {
+                try { logAm('error', 'cart', '「レジに進む」未検出 かつ カート空 → 停止'); } catch (e) {}
+            }
             toast(
-                `❌ classic cart の「レジに進む」ボタン未検出\n` +
-                `→ 手動で押してください`,
+                `❌ 「レジに進む」未検出 (カート空 or session異常)\n` +
+                `→ 手動で確認してください`,
                 STOP_RED, 12000
             );
             clearState();
