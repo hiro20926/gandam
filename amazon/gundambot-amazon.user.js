@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.3.9.8
+// @version      0.3.9.9
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3297,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.3.9.8';
+    const SCRIPT_VERSION = '0.3.9.9';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -12457,6 +12457,34 @@
         const proceedFoundFlag = { found: null };
         // 初回確認
         proceedBtn = findClassicCartProceedButton();
+
+        // ★v0.3.9.9: カート追加の「中間ページ」で 5 秒待って停止する問題を修正
+        //   (HIRO 報告 2026-09-01「レジに進むが未検出で止まる」)
+        //   実ログ解析: AOD カートイン直後の着地は /cart/add-to-cart/ref=aod_dpmw_new_0 で、
+        //   このページには「レジに進む」ボタンが存在しない(本物のカートへ Amazon が自動遷移する)。
+        //     成功例: /cart/add-to-cart/... → 約4.2秒後に /cart?ref_=ace_gtc へ自動遷移 → ボタン検出OK
+        //     失敗例: 自動遷移が 5 秒以内に来ず → Observer タイムアウト → 未検出で停止
+        //   対策: 中間ページと分かったら、無い物を待たずに本物のカートへ自前で navigate する。
+        //         (Amazon 自身の自動遷移との衝突を避けるため、短い猶予を与えてから発動)
+        if (!proceedBtn && /^\/cart\/add-to-cart\//.test(location.pathname)) {
+            try { logAm('info', 'cart',
+                'カート追加の中間ページを検出(レジに進むは存在しない)→ 本物のカートへ遷移', {
+                    path: location.pathname.slice(0, 80),
+                }); } catch (e) {}
+            for (let i = 0; i < 15; i++) {   // 自動遷移を最大1.5秒待つ(来ればそのまま任せる)
+                if (isStopped()) return;
+                if (!/^\/cart\/add-to-cart\//.test(location.pathname)) break;
+                await sleep(100);
+            }
+            if (/^\/cart\/add-to-cart\//.test(location.pathname)) {
+                if (isStopped()) return;
+                try { logAm('warn', 'cart',
+                    '自動遷移が来ないため /cart へ自前 navigate(停止回避)'); } catch (e) {}
+                location.href = 'https://www.amazon.co.jp/cart?ref_=ace_gtc';
+            }
+            return;
+        }
+
         if (!proceedBtn) {
             // MutationObserver で出現待ち
             await new Promise((resolve) => {
@@ -12508,9 +12536,26 @@
                     location.href = _directUrl;
                     return;
                 }
-                // buildDirectCheckoutUrl が null(session cookie 取得不可=セッション異常)→ 無理に進めず停止
-                try { logAm('error', 'cart',
-                    '「レジに進む」未検出・directUrl 生成不可(session cookie 無し)→ 停止'); } catch (e) {}
+                // ★v0.3.9.9: buildDirectCheckoutUrl は customerId(cookie x-main)必須だが、
+                //   iOS Safari では x-main が読めず常に null になる(実ログで hasCustomer=false が常態)。
+                //   → customerId 無しの簡易 URL で続行する。ユーザー識別はリクエストの cookie が担うため
+                //     oldCustomerId/preInitiateCustomerId は無くても checkout に入れる。
+                //   ※ buildDirectCheckoutUrl 本体は AOD 経路が使用中のため変更しない(動作中の機能を壊さない)。
+                let _simpleUrl = 'https://www.amazon.co.jp/checkout/entry/cart?proceedToCheckout=1&useDefaultCart=1';
+                try {
+                    const _sid = (document.cookie.match(/(?:^|;\s*)session-id=([\d\-]+)/) || [])[1];
+                    if (_sid && /^\d{3}-\d{7}-\d{7}$/.test(_sid)) {
+                        _simpleUrl += '&sessionID=' + encodeURIComponent(_sid);
+                    }
+                } catch (e) {}
+                try { logAm('warn', 'cart',
+                    '「レジに進む」未検出・directUrl 生成不可(x-main 無し)→ 簡易 checkout URL で続行(停止せず)', {
+                        url: _simpleUrl.slice(0, 120),
+                    }); } catch (e) {}
+                toast('▶ 「レジに進む」未検出 → checkout へ直行(自動継続)', BUY_GREEN, 4000);
+                try { setState(ST_CHECKOUT); } catch (e) {}
+                location.href = _simpleUrl;
+                return;
             } else {
                 try { logAm('error', 'cart', '「レジに進む」未検出 かつ カート空 → 停止'); } catch (e) {}
             }
