@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.4.0.0
+// @version      0.4.0.1
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3297,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.4.0.0';
+    const SCRIPT_VERSION = '0.4.0.1';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -11018,6 +11018,16 @@
             _aodCartAddApiOkAt = 0;
         } catch (e) {}
 
+        // ★v0.4.0.1: AOD で「Amazon 直販オファー」を選んで click する = 直販確認そのもの。
+        //   これを LB_AM_VERIFIED_DIRECT に記録する(HIRO 報告 2026-09-01「注文確定前で止まる」の根治)。
+        //   背景: Amazon のモバイル Buy Box 改変で detectBuyBoxSeller が merchantID を取れず
+        //   (実ログ: merchantID="(not found)")、直販フラグが立たないまま AOD 経路へ回る。
+        //   その結果 performOrderConfirm の failsafe で verifiedRecent=false /
+        //   transAmDirectTrust=false(新規開始は TRANS-AM ではない)となり、
+        //   「注文を確定する」を検出済みなのに click 前に無言停止していた。
+        //   AOD 走査は非 Amazon 出品者を除外済み(nonAmazonSkipped)なので、ここでの記録は安全。
+        try { localStorage.setItem('LB_AM_VERIFIED_DIRECT', String(Date.now())); } catch (e) {}
+
         // ★ 単発 click (駿河屋 v0.1.6 教訓: 二重押下絶対禁止)
         try {
             cartButton.click();
@@ -13267,6 +13277,18 @@
                 trustDirect ? 6000 : 15000
             );
             if (!trustDirect) {
+                // ★v0.4.0.1: ここは従来ログを一切出さず停止していたため、
+                //   「注文を確定するを検出したのに無言で止まる」原因不明の停止に見えていた。
+                //   必ず理由を記録する(実ログ 2026-09-01 23:23:32 の停止がこの分岐)。
+                try { logAm('error', 'order-confirm',
+                    '⛔ failsafe NG かつ直販未確認 → click せず停止', {
+                        context: contextLabel,
+                        issues: verify.issues,
+                        verifiedRecent: verifiedRecent,
+                        isTransAmTrust: isTransAmTrust,
+                        singleItem: !!(verify.checks && verify.checks.singleItem),
+                        withinMaxPrice: !!(verify.checks && verify.checks.withinMaxPrice),
+                    }); } catch (e) {}
                 clearState(); setStopped(true); return false;
             }
             try { logAm('info', 'order-confirm', transAmDirectTrust
