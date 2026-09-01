@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.2.8
+// @version      1.3.0
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.2.8';
+    const SCRIPT_VERSION = 'PC-1.3.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -5245,6 +5245,8 @@
                                 '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-rot" style="padding:6px 10px;background:' + (isRotTarget(p.asin) ? 'rgba(46,196,127,0.35)' : 'rgba(120,120,120,0.25)') + ';border:1px solid ' + (isRotTarget(p.asin) ? 'rgba(46,196,127,0.7)' : 'rgba(120,120,120,0.5)') + ';color:' + (isRotTarget(p.asin) ? '#9effc4' : '#bbb') + ';border-radius:4px;font-size:12px;font-weight:bold;white-space:nowrap;">' + (isRotTarget(p.asin) ? '🔄ON' : '⏸OFF') + '</button>' +
                                 '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-goto" title="商品ページ" style="padding:6px 9px;background:rgba(2,136,209,0.3);border:1px solid rgba(128,224,255,0.5);color:#b8d8e8;border-radius:4px;font-size:14px;">🔗</button>' +
                                 '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-homeurl" title="アイコン用URL" style="padding:6px 9px;background:rgba(196,30,158,0.25);border:1px solid rgba(255,128,216,0.5);color:#ff80d8;border-radius:4px;font-size:14px;">🏠</button>' +
+                                // ★PC-1.3.0: 1 商品だけを PC⇔スマホで受け渡すコピー (HIRO 要望 2026-09-01)
+                                '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-copy1" title="この商品だけコピー(スマホへ渡す)" style="padding:6px 9px;background:rgba(46,196,127,0.2);border:1px solid rgba(46,196,127,0.6);color:#6ee7a8;border-radius:4px;font-size:14px;">📋</button>' +
                                 '<button data-asin="' + escHtml(p.asin) + '" class="lb-am-prod-del" title="削除" style="padding:6px 9px;background:rgba(255,77,77,0.2);border:1px solid rgba(255,77,77,0.5);color:#ff8080;border-radius:4px;font-size:14px;">🗑</button>' +
                             '</div>' +
                         '</div>';
@@ -5267,6 +5269,8 @@
                         '<button id="lb-am-prod-export" style="flex:1;min-width:140px;padding:11px;background:linear-gradient(180deg,rgba(93,213,229,0.95),rgba(2,136,209,0.95));color:#08151c;border:0;border-radius:5px;font-size:13px;font-weight:bold;box-shadow:0 0 12px rgba(93,213,229,0.45);">💾 CSV 書き出し</button>' +
                         '<button id="lb-am-prod-import-file" style="flex:1;min-width:140px;padding:11px;background:rgba(2,136,209,0.85);color:#e8f4fa;border:1px solid rgba(128,224,255,0.5);border-radius:5px;font-size:13px;font-weight:bold;">📥 CSV ファイル選択</button>' +
                         '<button id="lb-am-prod-import-paste" style="flex:1;min-width:140px;padding:11px;background:rgba(2,136,209,0.6);color:#d0e8f5;border:1px solid rgba(128,224,255,0.4);border-radius:5px;font-size:13px;">📝 CSV 貼り付け</button>' +
+                        // ★PC-1.3.0: 1 商品だけの貼り付け登録 (各行の 📋 で作った文字列を貼る)
+                        '<button id="lb-am-prod-paste1" style="flex:1;min-width:140px;padding:11px;background:rgba(46,196,127,0.75);color:#06231a;border:0;border-radius:5px;font-size:13px;font-weight:bold;">📋 1商品を貼り付け</button>' +
                     '</div>' +
                     // ★v0.3.8.51: 全削除 (初期化) ボタン
                     '<div style="margin-bottom:14px;border-top:1px solid rgba(255,77,77,0.3);padding-top:10px;">' +
@@ -5339,6 +5343,79 @@
                     } catch (e) {
                         toast('CSV 解析失敗: ' + (e && e.message ? e.message : e), STOP_RED, 6000);
                     }
+                });
+                // ★PC-1.3.0: 📋 1 商品を貼り付け登録 (スマホの 📋 コピーで作った文字列を貼る)
+                //   中身は「ヘッダ + 1 行のミニ CSV」なので既存 importProductsFromCsv() をそのまま利用。
+                //   ヘッダ無し(データ行のみ)で貼られた場合も救済する。
+                document.getElementById('lb-am-prod-paste1').addEventListener('click', () => {
+                    let text = null;
+                    try { text = prompt('コピーした 1 商品のデータを貼り付けてください:'); } catch (e) {}
+                    if (!text) return;
+                    let body = String(text).trim();
+                    if (!/^﻿?asin\s*,/i.test(body)) {
+                        body = ['asin', 'product_name', 'buynow_url', 'saved_at', 'address_id'].join(',') + '\n' + body;
+                    }
+                    try {
+                        const r = importProductsFromCsv(body);
+                        if (r.added === 0 && r.skipped > 0) {
+                            toast('ℹ️ その商品は既に登録済みです(スキップ)', '#ed6c02', 6000);
+                        } else if (r.added === 0) {
+                            toast('❌ 登録できませんでした\n(データ形式を確認してください)', STOP_RED, 7000);
+                        } else {
+                            toast('✅ 1商品を登録しました' +
+                                  (r.addressIdSet ? '\n・addressID も登録' : ''), BUY_GREEN, 6000);
+                        }
+                        try { logAm('info', 'products-paste1', '📋 1商品 貼り付け登録', r); } catch (e) {}
+                        closeOv();
+                        setTimeout(() => { try { productsBtn.click(); } catch (e) {} }, 400);
+                    } catch (e) {
+                        toast('解析失敗: ' + (e && e.message ? e.message : e), STOP_RED, 6000);
+                    }
+                });
+                // ★PC-1.3.0: 📋 1 商品だけコピー (スマホへ渡す用)
+                //   形式は既存 CSV と完全互換(ヘッダ + 1 行)。buynow_url ごと運べるのが要点。
+                Array.prototype.forEach.call(ov.querySelectorAll('.lb-am-prod-copy1'), (btn) => {
+                    btn.addEventListener('click', async () => {
+                        const asin = btn.getAttribute('data-asin');
+                        if (!asin) return;
+                        const name = (function(){ try { return localStorage.getItem('LB_AM_PRODUCT_NAME_' + asin) || ''; } catch (e) { return ''; } })();
+                        const buUrl = (function(){ try { return localStorage.getItem('LB_AM_BUYNOW_URL_' + asin) || ''; } catch (e) { return ''; } })();
+                        const atMs = (function(){
+                            try {
+                                return localStorage.getItem('LB_AM_BUYNOW_URL_' + asin + '_AT')
+                                    || localStorage.getItem('LB_AM_ASIN_ONLY_' + asin) || '';
+                            } catch (e) { return ''; }
+                        })();
+                        const addressID = (function(){ try { return localStorage.getItem('LB_AM_ADDRESS_ID') || ''; } catch (e) { return ''; } })();
+                        let iso = '';
+                        try { const n = parseInt(atMs, 10); if (Number.isFinite(n) && n > 0) iso = new Date(n).toISOString(); } catch (e) {}
+                        const header = ['asin', 'product_name', 'buynow_url', 'saved_at', 'address_id'].join(',');
+                        const row = [
+                            csvEscapeField(asin), csvEscapeField(name), csvEscapeField(buUrl),
+                            csvEscapeField(iso), csvEscapeField(addressID),
+                        ].join(',');
+                        const text = header + '\n' + row;
+                        let ok = false;
+                        try { if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); ok = true; } } catch (e) {}
+                        if (!ok) {
+                            try {
+                                const ta = document.createElement('textarea');
+                                ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+                                document.body.appendChild(ta); ta.focus(); ta.select();
+                                ok = document.execCommand('copy');
+                                document.body.removeChild(ta);
+                            } catch (e) { ok = false; }
+                        }
+                        try { logAm('info', 'products-copy1',
+                            '📋 1商品コピー', { asin: asin, hasBuynowUrl: !!buUrl, ok: ok }); } catch (e) {}
+                        if (ok) {
+                            toast('📋 コピーしました: ' + asin + '\n' +
+                                  (buUrl ? '(TRANS-AM 直撃 URL 込み)' : '(ASIN のみ・直撃 URL なし)') +
+                                  '\n→ 相手側で「📋 1商品を貼り付け」', BUY_GREEN, 6000);
+                        } else {
+                            try { prompt('コピーしてください(Ctrl+C):', text); } catch (e) {}
+                        }
+                    });
                 });
                 // ★PC版: 全部 巡回ON / 全部 巡回OFF (一括)
                 const setAllRotTargets = (on) => {
