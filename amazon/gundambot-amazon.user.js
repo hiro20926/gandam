@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.3.9.7
+// @version      0.3.9.8
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3297,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.3.9.7';
+    const SCRIPT_VERSION = '0.3.9.8';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -7094,10 +7094,46 @@
         const max      = CONFIG.reloadMax;  // 0 = 無制限
 
         // ★v0.2.0: SESSION から reloadCount 取得
-        const session = S.getSession();
+        // ★v0.3.9.8: セッション消失で即完全停止しない(HIRO 報告 2026-08-28)
+        //   現象: 新規開始 → AOD ループ(「AOD に Amazon直販なし」#1..#23)の途中で、
+        //         理由ログ無しに RUNNING → STOPPED。直後の boot が hasSession=false。
+        //   原因: iOS Safari の navigate 越境で localStorage/sessionStorage の
+        //         読み出しが一時的に失敗すると getSession() が null を返し、ここで即停止していた。
+        //   対策: ① sessionStorage/localStorage を直接読む救済リトライ
+        //         ② それでも駄目なら「完全停止」ではなく「一時停止(▶再開で続行可)」に格下げ。
+        //            完全停止はセッション破棄で復帰不能になり、巡回チャンスを失うため。
+        let session = S.getSession();
         if (!session) {
-            try { logAm('warn', 'reload', 'セッションなし → 完全停止'); } catch (e) {}
-            S.opFullStop();
+            // 救済リトライ: ストレージを直接読む(getSession のキャッシュ経路を迂回)
+            try {
+                const rawSs = sessionStorage.getItem(KEY_V2_SESSION);
+                const rawLs = localStorage.getItem(KEY_V2_SESSION);
+                const raw = rawSs || rawLs;
+                if (raw) {
+                    const parsed = JSON.parse(raw);
+                    if (parsed && parsed.productUrl) {
+                        session = parsed;
+                        // 復元値を両ストレージに書き戻し(次の navigate 以降も生存させる)
+                        try { localStorage.setItem(KEY_V2_SESSION, JSON.stringify(parsed)); } catch (e) {}
+                        try { sessionStorage.setItem(KEY_V2_SESSION, JSON.stringify(parsed)); } catch (e) {}
+                        try { logAm('warn', 'session-recovery',
+                            'リロード時セッション消失 → ストレージ直読みで復元(停止回避)', {
+                                sid: parsed.sid ? String(parsed.sid).slice(0, 6) : null,
+                                from: rawSs ? 'sessionStorage' : 'localStorage',
+                                reason: reason,
+                            }); } catch (e) {}
+                    }
+                }
+            } catch (e) {}
+        }
+        if (!session) {
+            try { logAm('warn', 'reload',
+                'セッションなし(復元も失敗)→ 一時停止(▶再開で続行可)', {
+                    reason: reason,
+                    url: location.href.slice(0, 160),
+                }); } catch (e) {}
+            toast('⚠ セッションが読めませんでした → 一時停止\n▶再開で続行できます', '#f57c00', 8000);
+            S.opPause();
             return;
         }
         let count = session.reloadCount || 0;
@@ -11973,6 +12009,15 @@
         }
 
         if (screen !== 'PRODUCT') {
+            // ★v0.3.9.8: 無言停止の解消(HIRO 報告 2026-08-28「新規開始が途中で止まる」)
+            //   旧: toast のみで S.opFullStop() → ログに理由が残らず「原因不明の停止」に見えていた。
+            //   新: 理由を必ずログに残す(次回再現時に screen/URL から即特定できる)。
+            try { logAm('warn', 'trans-am',
+                '⚡ TRANS-AM 開始: 商品ページではない → 完全停止', {
+                    screen: screen,
+                    url: location.href.slice(0, 160),
+                    path: location.pathname,
+                }); } catch (e) {}
             toast('⚠️ 商品ページではありません', STOP_RED, 4000);
             S.opFullStop();   // 開始失敗時はフラグ含めて完全クリーンアップ
             return;
