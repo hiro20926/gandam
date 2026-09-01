@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.3.9.9
+// @version      0.4.0.0
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3297,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.3.9.9';
+    const SCRIPT_VERSION = '0.4.0.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -12471,17 +12471,24 @@
                 'カート追加の中間ページを検出(レジに進むは存在しない)→ 本物のカートへ遷移', {
                     path: location.pathname.slice(0, 80),
                 }); } catch (e) {}
-            for (let i = 0; i < 15; i++) {   // 自動遷移を最大1.5秒待つ(来ればそのまま任せる)
-                if (isStopped()) return;
-                if (!/^\/cart\/add-to-cart\//.test(location.pathname)) break;
-                await sleep(100);
-            }
-            if (/^\/cart\/add-to-cart\//.test(location.pathname)) {
-                if (isStopped()) return;
+            // ★v0.3.10.0: 猶予ループを撤廃し「即座に」遷移する。
+            //   v0.3.9.9 は自動遷移との衝突回避で最大1.5秒待っていたが、実ログ(2026-09-01 23:16:43)で
+            //   待機中に isStopped() が真になり無言で return → 遷移せず中間ページに留まる事故が発生。
+            //   行き先は同じ /cart なので Amazon 側の自動遷移と衝突しても実害がない。待たずに出る。
+            //   無限ピンポン防止: 同一 URL では 1 回だけ発動。
+            let _alreadyKicked = false;
+            try { _alreadyKicked = sessionStorage.getItem('LB_AM_CART_KICK') === location.href; } catch (e) {}
+            if (_alreadyKicked) {
                 try { logAm('warn', 'cart',
-                    '自動遷移が来ないため /cart へ自前 navigate(停止回避)'); } catch (e) {}
-                location.href = 'https://www.amazon.co.jp/cart?ref_=ace_gtc';
+                    '中間ページ遷移は実施済み → 二重遷移を回避', {
+                        path: location.pathname.slice(0, 80),
+                    }); } catch (e) {}
+                return;
             }
+            try { sessionStorage.setItem('LB_AM_CART_KICK', location.href); } catch (e) {}
+            try { logAm('warn', 'cart',
+                '中間ページ → /cart へ即 navigate(待機なし・停止回避)'); } catch (e) {}
+            location.href = 'https://www.amazon.co.jp/cart?ref_=ace_gtc';
             return;
         }
 
