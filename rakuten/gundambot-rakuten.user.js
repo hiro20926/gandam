@@ -3,7 +3,7 @@
 // @namespace    gundam-bot.rakuten-books
 // @updateURL    https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
 // @downloadURL  https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
-// @version      3.0.0
+// @version      3.1.0
 // @description  楽天ブックスの自動購入(rakuten全ドメイン対応・iOS Safari + Userscripts拡張用)/ Build 2026-05-04 21:00 JST
 // @author       HIRO
 // @match        https://*.rakuten.co.jp/*
@@ -132,6 +132,83 @@
         catch (e) { return false; }
     };
     const CONFIG = loadConfig();
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // ★v3.1.0: ログ基盤(Amazon版と同方式)
+    //   HIRO 要望「楽天もログを抽出したい」。従来はトースト表示のみで記録が残らず、
+    //   ログイン不具合の原因究明ができなかった。Amazon版 logAm と同じ構造にして
+    //   CSV で取り出せるようにする(列: timestamp,perfMs,level,tag,message,data)。
+    //   重要ログ(error/warn)は別バッファにも保持し、通常バッファが溢れても消えない。
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    const LOG_KEY_RB = 'lb_rb_log_buffer';
+    const LOG_MAX_RB = 1500;
+    const LOG_KEY_RB_CRIT = 'lb_rb_log_buffer_critical';
+    const LOG_MAX_RB_CRIT = 500;
+    const _readLog = (k, max) => {
+        try { return JSON.parse(localStorage.getItem(k) || '[]').slice(-max); } catch (e) { return []; }
+    };
+    const LOG_BUFFER_RB = _readLog(LOG_KEY_RB, LOG_MAX_RB);
+    const LOG_BUFFER_RB_CRIT = _readLog(LOG_KEY_RB_CRIT, LOG_MAX_RB_CRIT);
+    const _saveLogRb = () => {
+        try { localStorage.setItem(LOG_KEY_RB, JSON.stringify(LOG_BUFFER_RB)); } catch (e) {}
+    };
+    const _saveLogRbCrit = () => {
+        try { localStorage.setItem(LOG_KEY_RB_CRIT, JSON.stringify(LOG_BUFFER_RB_CRIT)); } catch (e) {}
+    };
+    const _rbStartedAt = Date.now();
+    const logRb = (level, category, message, detail) => {
+        try {
+            const t = new Date();
+            const pad = (n) => String(n).padStart(2, '0');
+            const ts = pad(t.getHours()) + ':' + pad(t.getMinutes()) + ':' + pad(t.getSeconds()) +
+                       '.' + String(t.getMilliseconds()).padStart(3, '0');
+            const entry = {
+                ts: ts, perfMs: Date.now() - _rbStartedAt,
+                level: level || 'info', category: category || '',
+                message: message || '', detail: detail || null,
+            };
+            LOG_BUFFER_RB.push(entry);
+            if (LOG_BUFFER_RB.length > LOG_MAX_RB) LOG_BUFFER_RB.shift();
+            _saveLogRb();
+            if (level === 'error' || level === 'warn') {
+                LOG_BUFFER_RB_CRIT.push(entry);
+                if (LOG_BUFFER_RB_CRIT.length > LOG_MAX_RB_CRIT) LOG_BUFFER_RB_CRIT.shift();
+                _saveLogRbCrit();
+            }
+            try { console.log(`[GBOT-RB] ${ts} ${level} ${category}: ${message}`, detail || ''); } catch (e) {}
+        } catch (e) {}
+    };
+    // 画面/フォームの状態をまるごと記録するヘルパー(ログイン不具合の解析用)
+    const dumpFormStateRb = (label) => {
+        try {
+            const vis = (e) => { try { const r = e.getBoundingClientRect();
+                return e.offsetParent !== null && r.width > 0 && r.height > 0; } catch (x) { return false; } };
+            const inputs = Array.from(document.querySelectorAll('input')).map((i) => ({
+                type: i.type, name: i.name || '', id: i.id || '',
+                visible: vis(i), disabled: !!i.disabled, hasValue: !!i.value,
+                autocomplete: i.getAttribute('autocomplete') || '',
+            }));
+            const buttons = Array.from(document.querySelectorAll('button,input[type=submit],a[role=button],div[role=button]'))
+                .filter(vis).map((b) => ({
+                    tag: b.tagName, type: b.getAttribute('type') || '',
+                    id: b.id || '', disabled: !!b.disabled,
+                    text: (b.innerText || b.value || '').trim().slice(0, 30),
+                }));
+            const texts = Array.from(document.querySelectorAll('a,button,div,span,li,label'))
+                .filter(vis).map((e) => (e.innerText || '').trim())
+                .filter((t) => t && t.length <= 30);
+            logRb('info', 'dom-dump', label, {
+                url: location.href.slice(0, 200),
+                host: location.host,
+                title: (document.title || '').slice(0, 60),
+                inputs: inputs.slice(0, 20),
+                buttons: buttons.slice(0, 15),
+                shortTexts: Array.from(new Set(texts)).slice(0, 40),
+                hasPasswordField: !!document.querySelector('input[type=password]'),
+                iframeCount: document.querySelectorAll('iframe').length,
+            });
+        } catch (e) {}
+    };
 
     // ───────────────────────────────────────────────
     // ストレージキー(v2.9: 過去版の汚染を完全回避するためキー名を変更)
@@ -750,6 +827,113 @@
         };
     };
 
+    // ★v3.1.0: 📋 ログ画面(一覧 / CSV保存 / コピー / クリア)
+    //   iPhone では CSV をダウンロードすると「ファイル」アプリに保存でき、
+    //   そのまま PC へ渡せる(Amazon版と同じ回収方法)。
+    const openLogPanel = () => {
+        if (document.getElementById('lb-rb-log-ov')) return;
+        const seen = new Set(); const merged = [];
+        for (const e of LOG_BUFFER_RB.concat(LOG_BUFFER_RB_CRIT)) {
+            const k = (e.ts || '') + '|' + (e.perfMs || '') + '|' + (e.category || '') + '|' + (e.message || '').slice(0, 40);
+            if (seen.has(k)) continue;
+            seen.add(k); merged.push(e);
+        }
+        merged.sort((a, b) => (a.ts || '').localeCompare(b.ts || ''));
+        const esc = (v) => String(v == null ? '' : v)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const csvEsc = (v) => {
+            const t = String(v == null ? '' : v);
+            return /[",\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+        };
+        const buildCsv = () => {
+            const header = ['timestamp', 'perfMs', 'level', 'tag', 'message', 'data'].join(',');
+            const rows = merged.map((e) => [
+                csvEsc(e.ts || ''), csvEsc(e.perfMs != null ? e.perfMs : ''),
+                csvEsc(e.level || ''), csvEsc(e.category || ''),
+                csvEsc(e.message || ''), csvEsc(e.detail ? JSON.stringify(e.detail) : ''),
+            ].join(','));
+            return '﻿' + header + '\n' + rows.join('\n');
+        };
+        const ov = document.createElement('div');
+        ov.id = 'lb-rb-log-ov';
+        ov.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,0.92);' +
+            'padding:12px;overflow:auto;font-family:sans-serif;';
+        const list = merged.slice(-200).map((e) => {
+            const col = e.level === 'error' ? '#ff8080' : (e.level === 'warn' ? '#ffb84d' : '#cfe8ff');
+            return '<div style="border-bottom:1px solid #333;padding:4px 0;font-size:11px;color:' + col + ';">' +
+                '<b>' + esc(e.ts) + '</b> [' + esc(e.category) + '] ' + esc(e.message) + '</div>';
+        }).join('');
+        ov.innerHTML =
+            '<div style="max-width:640px;margin:0 auto;">' +
+            '<div style="color:#ff8200;font-size:16px;font-weight:bold;">📋 楽天ログ (' + merged.length + '件)</div>' +
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;">' +
+            '<button id="lb-rb-log-csv" style="flex:1;min-width:130px;padding:12px;background:#ff8200;color:#fff;border:0;border-radius:6px;font-size:14px;font-weight:bold;">📥 CSV 保存</button>' +
+            '<button id="lb-rb-log-copy" style="flex:1;min-width:130px;padding:12px;background:#1976d2;color:#fff;border:0;border-radius:6px;font-size:14px;">📋 コピー</button>' +
+            '<button id="lb-rb-log-clear" style="flex:1;min-width:130px;padding:12px;background:#7a2222;color:#fff;border:0;border-radius:6px;font-size:14px;">🗑 クリア</button>' +
+            '<button id="lb-rb-log-close" style="flex:1;min-width:130px;padding:12px;background:#555;color:#fff;border:0;border-radius:6px;font-size:14px;">✕ 閉じる</button>' +
+            '</div>' +
+            '<div style="background:#0d0d0d;border-radius:6px;padding:8px;max-height:66vh;overflow:auto;">' +
+            (list || '<div style="color:#888;font-size:12px;">ログはまだありません</div>') + '</div></div>';
+        document.body.appendChild(ov);
+        const close = () => { try { ov.remove(); } catch (e) {} };
+        ov.querySelector('#lb-rb-log-close').onclick = close;
+        ov.querySelector('#lb-rb-log-csv').onclick = () => {
+            try {
+                const blob = new Blob([buildCsv()], { type: 'text/csv;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
+                const pad = (x) => String(x).padStart(2, '0');
+                const d = new Date();
+                const fname = 'gundambot-rakuten-log-' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) +
+                    '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()) + '.csv';
+                const a = document.createElement('a');
+                a.href = url; a.download = fname; a.style.display = 'none';
+                document.body.appendChild(a); a.click();
+                setTimeout(() => { try { URL.revokeObjectURL(url); a.remove(); } catch (e) {} }, 3000);
+                toast('📥 ' + fname, '#2e7d32', 6000);
+            } catch (e) { toast('❌ CSV保存に失敗', '#d32f2f', 6000); }
+        };
+        ov.querySelector('#lb-rb-log-copy').onclick = async () => {
+            const text = buildCsv();
+            let ok = false;
+            try { if (navigator.clipboard) { await navigator.clipboard.writeText(text); ok = true; } } catch (e) {}
+            if (!ok) {
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = text; ta.style.cssText = 'position:fixed;opacity:0;';
+                    document.body.appendChild(ta); ta.select();
+                    ok = document.execCommand('copy'); ta.remove();
+                } catch (e) {}
+            }
+            toast(ok ? '📋 ログをコピーしました' : '❌ コピーできませんでした', ok ? '#2e7d32' : '#d32f2f', 4000);
+        };
+        ov.querySelector('#lb-rb-log-clear').onclick = () => {
+            if (!confirm('ログを全消去しますか?')) return;
+            try {
+                LOG_BUFFER_RB.length = 0; LOG_BUFFER_RB_CRIT.length = 0;
+                localStorage.removeItem(LOG_KEY_RB); localStorage.removeItem(LOG_KEY_RB_CRIT);
+            } catch (e) {}
+            close(); toast('🗑 ログをクリアしました', '#666', 3000);
+        };
+    };
+
+    const renderLogButton = () => {
+        if (document.getElementById('lb-rb-log-btn')) return;
+        const btn = document.createElement('button');
+        btn.id = 'lb-rb-log-btn';
+        btn.type = 'button';
+        btn.textContent = '📋';
+        btn.title = 'ログ表示 / CSV保存';
+        btn.onclick = openLogPanel;
+        Object.assign(btn.style, {
+            position: 'fixed', bottom: '230px', right: '20px',
+            background: '#bf0000', color: 'white', border: 'none', borderRadius: '50%',
+            width: '40px', height: '40px', fontSize: '18px', cursor: 'pointer',
+            zIndex: '2147483647', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.4)', fontFamily: 'sans-serif',
+        });
+        document.body.appendChild(btn);
+    };
+
     const renderSettingsButton = () => {
         if (document.getElementById('lb-rb-settings-btn')) return;
         const btn = document.createElement('button');
@@ -776,7 +960,7 @@
     };
 
     // v2.9.4: バッジを目立つ赤背景にして、ログイン画面でも見落とさないようにする
-    const SCRIPT_VERSION = '3.0.0';
+    const SCRIPT_VERSION = '3.1.0';
     const renderVersionBadge = () => {
         let badge = document.getElementById('lb-rb-version-badge');
         if (!badge) {
@@ -1458,6 +1642,8 @@
         }
 
         if (bestMatch) {
+            logRb('info', 'login', 'パスワードログインへ切替をクリック', {
+                text: (bestMatch.innerText || '').trim().slice(0, 40), tag: bestMatch.tagName });
             toast(`🔐 パスワードログインへ切替: 「${(bestMatch.innerText || '').trim().substring(0, 20)}」`, '#1976d2', 3000);
             robustClick(bestMatch);
             // 切替後にDOM変化を待つ(MutationObserver)
@@ -1471,6 +1657,8 @@
     const handleLoginPage = async () => {
         // v2.9.4: ログイン画面到達を必ず可視化(UserScript起動の証拠)
         toast(`🔐 ログイン画面検出 v${SCRIPT_VERSION}`, '#1976d2', 5000);
+        logRb('info', 'login', 'ログイン画面を検出', { url: location.href.slice(0, 200), host: location.host });
+        dumpFormStateRb('ログイン画面 到達時のDOM');
 
         if (isStopped()) return;
 
@@ -1497,16 +1685,22 @@
                 );
                 if (!pwFieldRetry) {
                     toast('❌ パスワード入力欄が出ません(Face ID必須かも)', '#d32f2f', 8000);
+                    logRb('error', 'login', 'パスワード入力欄が出ない(切替後も未出現)');
+                    dumpFormStateRb('失敗: パスワード欄なし');
                     showLoginDiag('パスワード入力欄が出ない(切替後も未出現)');
                     return;
                 }
                 return handleLoginPage(); // 再帰でもう一度ログイン処理(パスワード欄ある状態で)
             }
             toast('❌ パスワードログインへ切替できず', '#d32f2f', 8000);
+            logRb('error', 'login', 'パスワードログインへの切替リンクが見つからない');
+            dumpFormStateRb('失敗: 切替リンクなし');
             showLoginDiag('パスワードログインへの切替リンクが見つからない');
             return;
         }
 
+        logRb('info', 'login', 'パスワード入力欄を検出', {
+            id: pwField.id || '', name: pwField.name || '', url: location.href.slice(0, 160) });
         const emailField = document.querySelector(
             'input[name=u]:not([disabled]), ' +
             'input[type=email]:not([disabled])'
@@ -1547,6 +1741,11 @@
         await sleep(100); // v2.9.20 高速化: 300→100(駿河屋 v0.3.0 の実績ベース)
 
         toast('🔐 ログイン送信...', '#2e7d32');
+        logRb('info', 'login', 'ログイン送信を実行', {
+            emailFilled: !!(emailField && emailField.value),
+            passwordFilled: !!pwField.value,
+            url: location.href.slice(0, 160) });
+        dumpFormStateRb('ログイン送信 直前のDOM');
 
         // submit ボタン探索
         let submitBtn = document.querySelector('button[type=submit]:not([disabled]), input[type=submit]:not([disabled])');
@@ -1595,6 +1794,8 @@
                 form.submit();
             } else {
                 toast('❌ 送信ボタン未発見', '#d32f2f', 6000);
+                logRb('error', 'login', 'ログイン送信ボタンが見つからない');
+                dumpFormStateRb('失敗: 送信ボタンなし');
                 showLoginDiag('ログイン送信ボタンが見つからない');
             }
         }
@@ -1665,6 +1866,8 @@
 
         // 起動可視化: 関連ページのみトースト
         try {
+            logRb('info', 'boot', `v${SCRIPT_VERSION} 起動`, {
+                host: host, path: location.pathname.slice(0, 120) });
             toast(`▶ v${SCRIPT_VERSION} on ${host}`, '#388e3c', 2500);
         } catch (e) {}
 
@@ -1673,6 +1876,7 @@
 
         renderStopButton();
         renderSettingsButton();
+        renderLogButton();
         startBadgeUpdater();
 
         if (isProductHost && location.pathname.startsWith('/rb/')) {
