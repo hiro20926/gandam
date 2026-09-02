@@ -14996,7 +14996,7 @@
             if (S.getMode && S.getMode() === MODE_RUNNING) {
                 const _ckWaitMs = (function () {
                     try { const v = parseInt(CONFIG.checkoutStuckMs, 10); if (Number.isFinite(v) && v >= 15000) return v; } catch (e) {}
-                    return 60000;
+                    return 30000;
                 })();
                 setTimeout(function () {
                     try {

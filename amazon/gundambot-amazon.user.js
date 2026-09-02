@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.4.1.0
+// @version      0.4.2.0
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3297,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.4.1.0';
+    const SCRIPT_VERSION = '0.4.2.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -14662,6 +14662,66 @@
             handleInIframe();
             return;
         }
+
+        // ★v0.4.2.0: 確定画面(CHECKOUT)専用の自動復帰ウォッチドッグ (HIRO 要望 2026-09)
+        //   問題: TRANS-AM で購入確定の直前まで行って買えなかった場合
+        //     (売り切れ・確定ボタンが出ない・click 空振り・iframe 変化を"進行中"と誤読 等)、
+        //     その確定画面に張り付いたままになり、誰も戻してくれなかった。
+        //   対策: 確定画面に一定時間(既定 30 秒)留まったままなら「買えなかった」と判断し、
+        //     セッションの商品 URL(=開始時に登録した商品)へ戻して監視ループを継続する。
+        //     セッションは保持するので停止しない(▶再開の操作も不要)。
+        //   安全性:
+        //     - 注文成功時は COMPLETE(/gp/buy/thankyou/)へ遷移し handleOrderComplete が
+        //       停止するため、ここには到達しない = 成功した注文を壊さない。
+        //     - 直近に確定 click がある場合は 20 秒の猶予を確保してから判定する。
+        try {
+            if (S.getMode && S.getMode() === MODE_RUNNING) {
+                const _ckWaitMs = (function () {
+                    try { const v = parseInt(CONFIG.checkoutStuckMs, 10); if (Number.isFinite(v) && v >= 15000) return v; } catch (e) {}
+                    return 30000;
+                })();
+                setTimeout(function () {
+                    try {
+                        if (!S.getMode || S.getMode() !== MODE_RUNNING) return;   // 停止/一時停止中は触らない
+                        if (S.shouldHalt && S.shouldHalt()) return;
+                        let scr = 'OTHER';
+                        try { scr = detectScreen(); } catch (e) {}
+                        const _p = location.pathname || '';
+                        // 完了(thankyou)に到達していれば成功 → 絶対に触らない
+                        if (scr === 'COMPLETE' || /thankyou/.test(_p)) return;
+                        // 確定画面に居続けている時だけ発火
+                        const _onCheckout = (scr === 'CHECKOUT') || /\/spc\b|place-order/.test(_p);
+                        if (!_onCheckout) return;
+                        // 直近の確定 click から 20 秒以内なら、まだ結果待ちの可能性 → 見送る
+                        try {
+                            const _ts = parseInt(localStorage.getItem('LB_AM_LAST_ORDER_CLICK_TS') || '0', 10) || 0;
+                            if (_ts > 0 && (Date.now() - _ts) < 20000) return;
+                        } catch (e) {}
+                        let _u = '';
+                        try { const _s = S.getSession(); if (_s && _s.productUrl) _u = _s.productUrl; } catch (e) {}
+                        try { logAm('warn', 'checkout-stuck-watchdog',
+                            '⏱ 確定画面に ' + Math.round(_ckWaitMs / 1000) + ' 秒留まったまま(買えなかった)→ 商品ページに戻って監視継続', {
+                            screen: scr, url: location.href.slice(0, 150), hasBackUrl: !!_u }); } catch (e) {}
+                        if (!_u) {
+                            try { logAm('warn', 'checkout-stuck-watchdog',
+                                '戻り先URLが取得できず(セッションに productUrl 無し)→ 復帰できません'); } catch (e) {}
+                            return;
+                        }
+                        try { toast('↩ 確定できませんでした → 商品ページに戻って監視を続けます', '#f57c00', 6000); } catch (e) {}
+                        try { S.setStep(STEP_IDLE); } catch (e) {}
+                        try { window.stop(); } catch (e) {}
+                        try {
+                            const _url = new URL(_u);
+                            _url.searchParams.set('_pageRefresh', String(Date.now()));
+                            _url.searchParams.set('_sw', String(Date.now()));
+                            if (CONFIG.autoForceAmazon) _url.searchParams.set('m', AMAZON_SELLER_ID);
+                            _url.searchParams.delete('aod');
+                            location.href = _url.toString();
+                        } catch (e) { try { location.href = _u; } catch (e2) {} }
+                    } catch (e) {}
+                }, _ckWaitMs);
+            }
+        } catch (e) {}
 
         // ★v0.3.8.62: stale TRANS-AM フラグ クリーンアップ (panel 生成の前に実行)
         //   HIRO 指摘 (2026-05-18 22:52): 「フラグがうまく動いてなくてピンクを表示してる可能性」
