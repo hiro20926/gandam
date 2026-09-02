@@ -3,7 +3,7 @@
 // @namespace    gundam-bot.rakuten-books
 // @updateURL    https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
 // @downloadURL  https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
-// @version      3.2.0
+// @version      3.3.0
 // @description  楽天ブックスの自動購入(rakuten全ドメイン対応・iOS Safari + Userscripts拡張用)/ Build 2026-05-04 21:00 JST
 // @author       HIRO
 // @match        https://*.rakuten.co.jp/*
@@ -122,14 +122,60 @@
         timerEnabled:   false,
         timerHHMM:      '',
     };
+    // ★v3.3.0: 設定をドメイン横断で共有する。
+    //   localStorage は origin ごとに分離されるため、books.rakuten.co.jp で保存した設定が
+    //   ログイン画面(login.account.rakuten.com / login.account.rakuten.co.jp)から読めず、
+    //   「パスワード未設定」として即 return し、ログイン処理が始まらない不具合があった
+    //   (実ログ 2026-09-03: 描画待ち前のDOMダンプで記録が途切れる)。
+    //   対策: localStorage に加えて、登録可能ドメイン単位の Cookie にも保存する。
+    //     - *.rakuten.co.jp 側は Cookie ".rakuten.co.jp" で全サブドメイン共有
+    //     - *.rakuten.com 側は Cookie ".rakuten.com" で共有
+    //   別TLD(co.jp ↔ com)は仕様上どうしても跨げないので、その場合は
+    //   設定画面を自動表示して1度だけ入力してもらう(Face IDで流し込める)。
+    const _cfgCookieDomain = () => {
+        const h = location.hostname || '';
+        if (/\.rakuten\.co\.jp$/.test(h) || h === 'rakuten.co.jp') return '.rakuten.co.jp';
+        if (/\.rakuten\.com$/.test(h) || h === 'rakuten.com') return '.rakuten.com';
+        return null;
+    };
+    const _readCfgCookie = () => {
+        try {
+            const m = document.cookie.match(new RegExp('(?:^|;\\s*)' + CFG_KEY + '=([^;]*)'));
+            if (!m) return null;
+            return JSON.parse(decodeURIComponent(m[1]));
+        } catch (e) { return null; }
+    };
+    const _writeCfgCookie = (cfg) => {
+        try {
+            const dom = _cfgCookieDomain();
+            if (!dom) return false;
+            const v = encodeURIComponent(JSON.stringify(cfg));
+            // 1年保持。Secure + SameSite=Lax(同一サイト遷移で送られる)
+            document.cookie = CFG_KEY + '=' + v + ';path=/;domain=' + dom +
+                ';max-age=31536000;SameSite=Lax;Secure';
+            return true;
+        } catch (e) { return false; }
+    };
     const loadConfig = () => {
         let saved = {};
         try { saved = JSON.parse(localStorage.getItem(CFG_KEY) || '{}') || {}; } catch (e) { saved = {}; }
-        return Object.assign({}, CONFIG_DEFAULTS, saved);
+        // localStorage に無い / パスワードが空 なら Cookie 側を見る(別サブドメインで保存された場合)
+        if (!saved || !saved.password) {
+            const c = _readCfgCookie();
+            if (c && c.password) {
+                saved = c;
+                // このoriginにも複製しておくと次回以降は即読める
+                try { localStorage.setItem(CFG_KEY, JSON.stringify(c)); } catch (e) {}
+            }
+        }
+        return Object.assign({}, CONFIG_DEFAULTS, saved || {});
     };
     const saveConfig = (cfg) => {
-        try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); return true; }
-        catch (e) { return false; }
+        let ok = false;
+        try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); ok = true; } catch (e) {}
+        // ドメイン横断共有用にCookieにも書く(失敗してもlocalStorageが生きていればOK)
+        try { _writeCfgCookie(cfg); } catch (e) {}
+        return ok;
     };
     const CONFIG = loadConfig();
 
@@ -960,7 +1006,7 @@
     };
 
     // v2.9.4: バッジを目立つ赤背景にして、ログイン画面でも見落とさないようにする
-    const SCRIPT_VERSION = '3.2.0';
+    const SCRIPT_VERSION = '3.3.0';
     const renderVersionBadge = () => {
         let badge = document.getElementById('lb-rb-version-badge');
         if (!badge) {
@@ -1749,7 +1795,17 @@
         if (isStopped()) return;
 
         if (!CONFIG.password) {
-            toast('⚠️ パスワード未設定', '#f57c00', 5000);
+            // ★v3.3.0: 従来はここで何も記録せず return していたため、ログが
+            //   「描画待ち前のDOMダンプ」で途切れ、原因が分からなかった。必ず記録する。
+            logRb('error', 'login', 'パスワード未設定 → ログイン処理を開始できない', {
+                origin: location.origin,
+                host: location.host,
+                hasUsername: !!CONFIG.username,
+                fromCookie: !!_readCfgCookie(),
+                hint: 'このドメインに設定が無い可能性(localStorageはドメインごとに分離される)',
+            });
+            toast('⚠️ この画面のドメインに設定がありません\n設定画面を開きます(Face IDで入力できます)', '#f57c00', 8000);
+            try { openSettingsPanel(); } catch (e) {}
             return;
         }
 
@@ -1958,7 +2014,9 @@
         // 起動可視化: 関連ページのみトースト
         try {
             logRb('info', 'boot', `v${SCRIPT_VERSION} 起動`, {
-                host: host, path: location.pathname.slice(0, 120) });
+                host: host, path: location.pathname.slice(0, 120),
+                hasUsername: !!CONFIG.username, hasPassword: !!CONFIG.password,
+                cfgFromCookie: !!_readCfgCookie() });
             toast(`▶ v${SCRIPT_VERSION} on ${host}`, '#388e3c', 2500);
         } catch (e) {}
 
