@@ -3,7 +3,7 @@
 // @namespace    gundam-bot.rakuten-books
 // @updateURL    https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
 // @downloadURL  https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
-// @version      3.6.0
+// @version      3.7.0
 // @description  楽天ブックスの自動購入(rakuten全ドメイン対応・iOS Safari + Userscripts拡張用)/ Build 2026-05-04 21:00 JST
 // @author       HIRO
 // @match        https://*.rakuten.co.jp/*
@@ -1063,7 +1063,7 @@
     };
 
     // v2.9.4: バッジを目立つ赤背景にして、ログイン画面でも見落とさないようにする
-    const SCRIPT_VERSION = '3.6.0';
+    const SCRIPT_VERSION = '3.7.0';
     const renderVersionBadge = () => {
         let badge = document.getElementById('lb-rb-version-badge');
         if (!badge) {
@@ -1857,23 +1857,43 @@
     };
     // 「次へ」等の実行ボタンを、role属性に依存せず最も内側の可視要素として特定する
     const findNextButton = () => {
-        const WORDS = ['次へ', 'ログイン', 'サインイン', '送信', '確認'];
-        const NG = ['お忘れ', '別の楽天', '登録', '規約', 'ヘルプ', '保護方針', 'しないで'];
-        let best = null;
+        // ★v3.7.0: 実ログ(01:28:57)で「楽天会員 ログイン」という【見出し】を
+        //   クリックしてしまう誤爆が発生した。原因は部分一致('ログイン')で
+        //   見出しにヒットし、DOM上で見出しの方が先にあるため勝っていたこと。
+        //   対策: 完全一致を最優先し、部分一致は最後の手段にする。
+        //         さらに、押せる要素らしさ(id が cta〜 / role=button / button 要素)を加点する。
+        const EXACT = ['次へ', 'ログイン', 'サインイン', '送信', '確認する', '確認'];
+        const NG = ['お忘れ', '別の楽天', '登録', '規約', 'ヘルプ', '保護方針', 'しないで',
+                    '楽天会員', 'シークレット', 'ポイント', '新規タブ'];
         const cands = document.querySelectorAll(
             'button, input[type=submit], a, div[role="button"], span[role="button"], div, span, li'
         );
+        const score = (el, exact) => {
+            let sc = exact ? 1000 : 0;
+            const id = (el.id || '').toLowerCase();
+            if (/^cta/.test(id)) sc += 500;                       // 楽天の実行ボタンは cta001 / cta011
+            if (el.getAttribute && el.getAttribute('role') === 'button') sc += 200;
+            if (el.tagName === 'BUTTON' || el.tagName === 'INPUT') sc += 200;
+            sc -= (el.children ? el.children.length : 0) * 10;    // 内側の要素ほど良い
+            return sc;
+        };
+        let best = null, bestScore = -1;
         for (const el of cands) {
             const t = (el.innerText || el.value || '').trim();
             if (!t || t.length > 12) continue;
             if (NG.some((n) => t.includes(n))) continue;
             if (!_rbVisible(el)) continue;
-            for (const w of WORDS) {
-                if (t === w || t.includes(w)) {
-                    if (!best || el.children.length < best.children.length) best = el;
-                    break;
-                }
+            let exact = false, hit = false;
+            for (const w of EXACT) {
+                if (t === w) { exact = true; hit = true; break; }
             }
+            if (!hit) {
+                // 部分一致は「次へ」だけ許可(他は見出し等と衝突しやすい)
+                if (t.includes('次へ')) hit = true;
+            }
+            if (!hit) continue;
+            const sc = score(el, exact);
+            if (sc > bestScore) { bestScore = sc; best = el; }
         }
         return best;
     };
