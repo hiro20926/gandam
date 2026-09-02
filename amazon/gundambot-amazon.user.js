@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.4.2.0
+// @version      0.4.2.1
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3297,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.4.2.0';
+    const SCRIPT_VERSION = '0.4.2.1';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -14692,6 +14692,11 @@
                         // 確定画面に居続けている時だけ発火
                         const _onCheckout = (scr === 'CHECKOUT') || /\/spc\b|place-order/.test(_p);
                         if (!_onCheckout) return;
+                        // ★二重購入の防止: 確定 click 済み(step=ORDER_PLACED)なら絶対に触らない。
+                        //   注文が通ったのに完了画面へ到達できなかった稀なケースで、
+                        //   商品ページへ戻して再購入してしまうのを防ぐ(既存18秒watchdogと同じ方針)。
+                        //   click 前の中断(確定ボタンが出ない/failsafe NG/売り切れ)だけを復帰対象にする。
+                        try { if (S.getStep && S.getStep() === STEP_ORDER_PLACED) return; } catch (e) {}
                         // 直近の確定 click から 20 秒以内なら、まだ結果待ちの可能性 → 見送る
                         try {
                             const _ts = parseInt(localStorage.getItem('LB_AM_LAST_ORDER_CLICK_TS') || '0', 10) || 0;

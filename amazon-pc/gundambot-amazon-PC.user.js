@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.3.1
+// @version      1.3.2
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.3.1';
+    const SCRIPT_VERSION = 'PC-1.3.2';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -15010,6 +15010,11 @@
                         // 確定画面に居続けている時だけ発火
                         const _onCheckout = (scr === 'CHECKOUT') || /\/spc\b|place-order/.test(_p);
                         if (!_onCheckout) return;
+                        // ★二重購入の防止: 確定 click 済み(step=ORDER_PLACED)なら絶対に触らない。
+                        //   注文が通ったのに完了画面へ到達できなかった稀なケースで、
+                        //   商品ページへ戻して再購入してしまうのを防ぐ(既存18秒watchdogと同じ方針)。
+                        //   click 前の中断(確定ボタンが出ない/failsafe NG/売り切れ)だけを復帰対象にする。
+                        try { if (S.getStep && S.getStep() === STEP_ORDER_PLACED) return; } catch (e) {}
                         // 直近の確定 click から 20 秒以内なら、まだ結果待ちの可能性 → 見送る
                         try {
                             const _ts = parseInt(localStorage.getItem('LB_AM_LAST_ORDER_CLICK_TS') || '0', 10) || 0;
