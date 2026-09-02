@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.3.2
+// @version      1.3.3
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.3.2';
+    const SCRIPT_VERSION = 'PC-1.3.3';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -14998,7 +14998,7 @@
                     try { const v = parseInt(CONFIG.checkoutStuckMs, 10); if (Number.isFinite(v) && v >= 15000) return v; } catch (e) {}
                     return 30000;
                 })();
-                setTimeout(function () {
+                const _ckWatch = function _ckWatch() {
                     try {
                         if (!S.getMode || S.getMode() !== MODE_RUNNING) return;   // 停止/一時停止中は触らない
                         if (S.shouldHalt && S.shouldHalt()) return;
@@ -15010,11 +15010,35 @@
                         // 確定画面に居続けている時だけ発火
                         const _onCheckout = (scr === 'CHECKOUT') || /\/spc\b|place-order/.test(_p);
                         if (!_onCheckout) return;
-                        // ★二重購入の防止: 確定 click 済み(step=ORDER_PLACED)なら絶対に触らない。
-                        //   注文が通ったのに完了画面へ到達できなかった稀なケースで、
-                        //   商品ページへ戻して再購入してしまうのを防ぐ(既存18秒watchdogと同じ方針)。
-                        //   click 前の中断(確定ボタンが出ない/failsafe NG/売り切れ)だけを復帰対象にする。
-                        try { if (S.getStep && S.getStep() === STEP_ORDER_PLACED) return; } catch (e) {}
+                        // ★確定 click 済み(step=ORDER_PLACED)は「より長く待ってから」復帰する。
+                        //   実ログ実測(確定click 108件): 成功時の click→注文完了(thankyou)は
+                        //   最小 1.7 秒 / 中央値 2.3 秒。つまり成功なら数秒で完了画面に着く。
+                        //   よって click 後に既定 60 秒(成功中央値の約26倍)経っても確定画面に
+                        //   居るなら「注文は通っていない(固まった/弾かれた)」と判断してよい。
+                        //   ※HIRO 実機で確認済み: 確定 click 後に固まったケースは購入できていない。
+                        //   click していない場合(確定ボタンが出ない/failsafe NG/売り切れ)は既定 30 秒。
+                        let _clickedAlready = false;
+                        try { _clickedAlready = (S.getStep && S.getStep() === STEP_ORDER_PLACED); } catch (e) {}
+                        if (_clickedAlready) {
+                            const _afterClickMs = (function () {
+                                try { const v = parseInt(CONFIG.checkoutStuckAfterClickMs, 10); if (Number.isFinite(v) && v >= 30000) return v; } catch (e) {}
+                                return 60000;
+                            })();
+                            let _sinceStart = 0;
+                            try { _sinceStart = Date.now() - (window.__gbot_am_page_start__ || Date.now()); } catch (e) {}
+                            let _sinceClick = -1;
+                            try {
+                                const _c = parseInt(localStorage.getItem('LB_AM_LAST_ORDER_CLICK_TS') || '0', 10) || 0;
+                                if (_c > 0) _sinceClick = Date.now() - _c;
+                            } catch (e) {}
+                            // click からの経過が分かる場合はそれを優先、無ければページ滞在時間で代用
+                            const _elapsed = (_sinceClick >= 0) ? _sinceClick : _sinceStart;
+                            if (_elapsed < _afterClickMs) {
+                                // まだ猶予内 → 残り時間だけ待って再判定(タイマーを張り直す)
+                                try { setTimeout(_ckWatch, Math.max(2000, _afterClickMs - _elapsed)); } catch (e) {}
+                                return;
+                            }
+                        }
                         // 直近の確定 click から 20 秒以内なら、まだ結果待ちの可能性 → 見送る
                         try {
                             const _ts = parseInt(localStorage.getItem('LB_AM_LAST_ORDER_CLICK_TS') || '0', 10) || 0;
@@ -15043,7 +15067,8 @@
                                 '戻り先URLが取得できず(登録商品なし)→ 復帰できません'); } catch (e) {}
                         }
                     } catch (e) {}
-                }, _ckWaitMs);
+                };
+                setTimeout(_ckWatch, _ckWaitMs);
             }
         } catch (e) {}
 
