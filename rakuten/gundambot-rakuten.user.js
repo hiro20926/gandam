@@ -3,7 +3,7 @@
 // @namespace    gundam-bot.rakuten-books
 // @updateURL    https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
 // @downloadURL  https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
-// @version      3.5.0
+// @version      3.6.0
 // @description  楽天ブックスの自動購入(rakuten全ドメイン対応・iOS Safari + Userscripts拡張用)/ Build 2026-05-04 21:00 JST
 // @author       HIRO
 // @match        https://*.rakuten.co.jp/*
@@ -1063,7 +1063,7 @@
     };
 
     // v2.9.4: バッジを目立つ赤背景にして、ログイン画面でも見落とさないようにする
-    const SCRIPT_VERSION = '3.5.0';
+    const SCRIPT_VERSION = '3.6.0';
     const renderVersionBadge = () => {
         let badge = document.getElementById('lb-rb-version-badge');
         if (!badge) {
@@ -1729,8 +1729,9 @@
                     if (ins.length > 0) return true;
                     const btns = Array.from(document.querySelectorAll('button,a[role=button],div[role=button]')).filter(vis);
                     if (btns.length > 0) return true;
-                    const txt = ((document.body && document.body.innerText) || '').trim();
-                    return txt.length >= 20;
+                    // ★v3.6.0: 実ログで inputs/buttons が空のまま waitedMs:0 で通過していた。
+                    //   本文だけで判定せず「操作対象が実在すること」を条件にする。
+                    return false;
                 } catch (x) { return false; }
             };
             const finish = (ok) => {
@@ -1843,6 +1844,90 @@
         return false; // 切替リンク見つからず
     };
 
+    // ★v3.6.0: 楽天の新ログインUIは【2段階】であることが実ログで判明(2026-09-03)。
+    //   段階1: 「楽天会員 ログイン」 input#user_id(name=username) → DIV#cta001「次へ」
+    //   段階2: 「ようこそ <ID>」     input#password_current       → DIV#cta011「次へ」
+    //   従来は段階2しか想定しておらず、段階1では出るはずのないパスワード欄を
+    //   18秒探して失敗していた(実ログ 01:24:43「切替リンクが見つからない」)。
+    const _rbVisible = (el) => {
+        try {
+            const r = el.getBoundingClientRect();
+            return el.offsetParent !== null && r.width > 0 && r.height > 0;
+        } catch (e) { return false; }
+    };
+    // 「次へ」等の実行ボタンを、role属性に依存せず最も内側の可視要素として特定する
+    const findNextButton = () => {
+        const WORDS = ['次へ', 'ログイン', 'サインイン', '送信', '確認'];
+        const NG = ['お忘れ', '別の楽天', '登録', '規約', 'ヘルプ', '保護方針', 'しないで'];
+        let best = null;
+        const cands = document.querySelectorAll(
+            'button, input[type=submit], a, div[role="button"], span[role="button"], div, span, li'
+        );
+        for (const el of cands) {
+            const t = (el.innerText || el.value || '').trim();
+            if (!t || t.length > 12) continue;
+            if (NG.some((n) => t.includes(n))) continue;
+            if (!_rbVisible(el)) continue;
+            for (const w of WORDS) {
+                if (t === w || t.includes(w)) {
+                    if (!best || el.children.length < best.children.length) best = el;
+                    break;
+                }
+            }
+        }
+        return best;
+    };
+    const rbFullClick = (el) => {
+        if (!el) return;
+        const o = { bubbles: true, cancelable: true, view: window };
+        try { el.dispatchEvent(new PointerEvent('pointerdown', o)); } catch (e) {}
+        try { el.dispatchEvent(new MouseEvent('mousedown', o)); } catch (e) {}
+        try { el.dispatchEvent(new PointerEvent('pointerup', o)); } catch (e) {}
+        try { el.dispatchEvent(new MouseEvent('mouseup', o)); } catch (e) {}
+        try { el.click(); } catch (e) {}
+        try { el.dispatchEvent(new MouseEvent('click', o)); } catch (e) {}
+    };
+    // 段階1(ユーザーID入力)を処理する。処理したら true。
+    const handleLoginStage1 = async () => {
+        const idField = document.querySelector(
+            'input#user_id:not([disabled]), input[name=username]:not([disabled]), input[type=email]:not([disabled])'
+        );
+        if (!idField || !_rbVisible(idField)) return false;
+        if (document.querySelector('input[type=password]')) return false;   // 既に段階2
+        if (!CONFIG.username) {
+            logRb('error', 'login', '段階1(ID入力)だが ユーザーID が未設定', {});
+            toast('⚠️ ユーザーID が未設定です。⚙ から設定してください', '#f57c00', 8000);
+            return false;
+        }
+        logRb('info', 'login', '段階1: ユーザーID入力画面を検出', {
+            id: idField.id || '', name: idField.name || '', hasValue: !!idField.value });
+        if (!idField.value) {
+            try { suppressPasswordManager(idField); } catch (e) {}
+            fillNative(idField, CONFIG.username);
+        }
+        await sleep(150);
+        const nextBtn = findNextButton();
+        if (!nextBtn) {
+            logRb('error', 'login', '段階1: 「次へ」ボタンが見つからない');
+            dumpFormStateRb('失敗: 段階1の次へボタンなし');
+            return false;
+        }
+        logRb('info', 'login', '段階1: 「次へ」をクリック', {
+            tag: nextBtn.tagName, id: nextBtn.id || '', text: (nextBtn.innerText || '').trim().slice(0, 12) });
+        const beforeHtmlLen = (document.body && document.body.innerHTML.length) || 0;
+        rbFullClick(nextBtn);
+        // 段階2(パスワード欄)が出るのを待つ
+        const pw = await waitForSelector('input[type=password]:not([disabled])', 10000);
+        if (pw) {
+            logRb('info', 'login', '段階1 完了 → 段階2(パスワード)へ');
+            return true;
+        }
+        logRb('warn', 'login', '段階1: 「次へ」後にパスワード欄が出ない', {
+            htmlChanged: ((document.body && document.body.innerHTML.length) || 0) !== beforeHtmlLen });
+        dumpFormStateRb('段階1の次へ後にパスワード欄が出ない時のDOM');
+        return false;
+    };
+
     const handleLoginPage = async () => {
         // v2.9.4: ログイン画面到達を必ず可視化(UserScript起動の証拠)
         toast(`🔐 ログイン画面検出 v${SCRIPT_VERSION}`, '#1976d2', 5000);
@@ -1874,6 +1959,10 @@
         await waitForPageRender(12000);
         if (isStopped()) return;
         dumpFormStateRb('描画完了後のDOM(ここを見て判断する)');
+
+        // ★v3.6.0: 先に段階1(ユーザーID入力)かどうかを判定して処理する
+        await handleLoginStage1();
+        if (isStopped()) return;
 
         // v2.6: Face ID画面でも「パスワードでログイン」を自動クリックして切替
         await switchToPasswordMode();
