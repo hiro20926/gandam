@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.3.0
+// @version      1.3.1
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.3.0';
+    const SCRIPT_VERSION = 'PC-1.3.1';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -14977,6 +14977,68 @@
                         }
                     } catch (e) {}
                 }, 18000);
+            }
+        } catch (e) {}
+
+        // ★PC-1.3.1: 確定画面(CHECKOUT)専用の自動復帰ウォッチドッグ (HIRO 要望 2026-09)
+        //   問題: 上の 18 秒ウォッチドッグは「注文を壊さない」ため CHECKOUT/spc/place-order を
+        //     明示的に除外している。そのため TRANS-AM で確定画面まで行って買えなかった場合
+        //     (売り切れ・確定ボタンが出ない・click 空振り・iframe 変化を"進行中"と誤読 等)、
+        //     誰も戻してくれず、その画面に張り付いたままになっていた。
+        //   対策: 確定画面に長時間(既定 60 秒)留まったままなら「買えなかった」と判断し、
+        //     登録商品の URL に戻して監視ループを継続する(セッションは保持=停止しない)。
+        //   安全性:
+        //     - 注文成功時は COMPLETE(/thankyou/)へ遷移し handleOrderComplete が停止するため、
+        //       ここに到達しない = 成功した注文を壊さない。
+        //     - 60 秒は確定 POST の往復より遥かに長く、進行中の注文を中断する現実的リスクはない。
+        //     - 直近に確定 click がある場合は更に 20 秒の猶予を確保してから判定する。
+        try {
+            if (S.getMode && S.getMode() === MODE_RUNNING) {
+                const _ckWaitMs = (function () {
+                    try { const v = parseInt(CONFIG.checkoutStuckMs, 10); if (Number.isFinite(v) && v >= 15000) return v; } catch (e) {}
+                    return 60000;
+                })();
+                setTimeout(function () {
+                    try {
+                        if (!S.getMode || S.getMode() !== MODE_RUNNING) return;   // 停止/一時停止中は触らない
+                        if (S.shouldHalt && S.shouldHalt()) return;
+                        let scr = 'OTHER';
+                        try { scr = detectScreen(); } catch (e) {}
+                        const _p = location.pathname || '';
+                        // 完了(thankyou)に到達していれば成功 → 絶対に触らない
+                        if (scr === 'COMPLETE' || /thankyou/.test(_p)) return;
+                        // 確定画面に居続けている時だけ発火
+                        const _onCheckout = (scr === 'CHECKOUT') || /\/spc\b|place-order/.test(_p);
+                        if (!_onCheckout) return;
+                        // 直近の確定 click から 20 秒以内なら、まだ結果待ちの可能性 → 見送る
+                        try {
+                            const _ts = parseInt(localStorage.getItem('LB_AM_LAST_ORDER_CLICK_TS') || '0', 10) || 0;
+                            if (_ts > 0 && (Date.now() - _ts) < 20000) return;
+                        } catch (e) {}
+                        try { logAm('warn', 'checkout-stuck-watchdog',
+                            '⏱ 確定画面に ' + Math.round(_ckWaitMs / 1000) + ' 秒留まったまま(買えなかった)→ 登録商品URLに戻って監視継続', {
+                            screen: scr, url: location.href.slice(0, 150) }); } catch (e) {}
+                        try { toast('↩ 確定できませんでした → 商品ページに戻って監視を続けます', '#f57c00', 6000); } catch (e) {}
+                        try { S.setStep(STEP_IDLE); } catch (e) {}
+                        try { window.stop(); } catch (e) {}
+                        let _u = '';
+                        try { if (typeof rotateNextUrl === 'function') _u = rotateNextUrl() || ''; } catch (e) {}
+                        if (!_u) { try { const _s = S.getSession(); if (_s && _s.productUrl) _u = _s.productUrl; } catch (e) {} }
+                        if (_u) {
+                            try {
+                                const _url = new URL(_u);
+                                _url.searchParams.set('_pageRefresh', String(Date.now()));
+                                _url.searchParams.set('_sw', String(Date.now()));
+                                if (CONFIG.autoForceAmazon) _url.searchParams.set('m', AMAZON_SELLER_ID);
+                                _url.searchParams.delete('aod');
+                                location.href = _url.toString();
+                            } catch (e) { try { location.href = _u; } catch (e2) {} }
+                        } else {
+                            try { logAm('warn', 'checkout-stuck-watchdog',
+                                '戻り先URLが取得できず(登録商品なし)→ 復帰できません'); } catch (e) {}
+                        }
+                    } catch (e) {}
+                }, _ckWaitMs);
             }
         } catch (e) {}
 
