@@ -3,7 +3,7 @@
 // @namespace    gundam-bot.rakuten-books
 // @updateURL    https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
 // @downloadURL  https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
-// @version      3.3.0
+// @version      3.4.0
 // @description  楽天ブックスの自動購入(rakuten全ドメイン対応・iOS Safari + Userscripts拡張用)/ Build 2026-05-04 21:00 JST
 // @author       HIRO
 // @match        https://*.rakuten.co.jp/*
@@ -816,9 +816,25 @@
             'overflow:auto;padding:16px;font-family:sans-serif;';
         const L = 'display:block;margin:10px 0 4px;color:#ffb84d;font-size:13px;font-weight:bold;';
         const I = 'width:100%;padding:12px;font-size:16px;border:1px solid #888;border-radius:6px;box-sizing:border-box;';
+        // ★v3.4.0: 空欄で開いた時に「なぜ空欄なのか」が分からず混乱するため説明を出す。
+        //   楽天は購入途中で books.rakuten.co.jp → login.account.rakuten.com へ移動し、
+        //   この2つは別サイト扱い(.co.jp と .com)でブラウザの保存領域が完全に分離される。
+        //   = 片方の設定はもう片方から原理的に読めない(消えたわけではない)。
+        const _isEmpty = !cur.password;
+        const _notice = _isEmpty
+            ? '<div style="background:#3a2a00;border:1px solid #ff8200;border-radius:6px;padding:10px;margin-bottom:10px;color:#ffd9a0;font-size:12px;line-height:1.6;">' +
+              '<b>⚠ このサイト用の設定がまだありません(消えたのではありません)</b><br>' +
+              '楽天は購入の途中で <b>' + esc(location.hostname) + '</b> に移動します。' +
+              'ブラウザの仕様で、別サイトに保存した設定はここから読めません。<br>' +
+              '<b>ここで1回だけ入力すれば、以後この画面でも記憶されます。</b><br>' +
+              'パスワード欄をタップ → <b>Face ID</b> で楽天の保存済みパスワードを入れられます。' +
+              '</div>'
+            : '';
         ov.innerHTML =
             '<form id="lb-rb-cfgform" style="max-width:520px;margin:0 auto;background:#161616;padding:16px;border-radius:10px;">' +
             '<div style="color:#ff8200;font-size:17px;font-weight:bold;margin-bottom:4px;">⚙ 楽天ブックス設定</div>' +
+            '<div style="color:#8fb7cc;font-size:11px;margin-bottom:8px;">保存先: ' + esc(location.hostname) + '</div>' +
+            _notice +
             '<div style="color:#bbb;font-size:12px;margin-bottom:10px;">' +
             'ID/パスワードは<b>この端末内だけ</b>に保存されます(配布ファイルには含まれません)。<br>' +
             '入力欄をタップすると Face ID の自動入力が使えます。</div>' +
@@ -864,6 +880,11 @@
                 debugMode:      !!cur.debugMode,
             };
             if (saveConfig(next)) {
+                try { logRb('info', 'config', '設定を保存', {
+                    host: location.hostname,
+                    hasUsername: !!next.username, hasPassword: !!next.password,
+                    cookieShared: !!_cfgCookieDomain(),
+                }); } catch (e) {}
                 toast('💾 保存しました(反映のためページを再読み込みします)', '#2e7d32', 2500);
                 close();
                 setTimeout(() => { try { location.reload(); } catch (e) {} }, 800);
@@ -1006,7 +1027,7 @@
     };
 
     // v2.9.4: バッジを目立つ赤背景にして、ログイン画面でも見落とさないようにする
-    const SCRIPT_VERSION = '3.3.0';
+    const SCRIPT_VERSION = '3.4.0';
     const renderVersionBadge = () => {
         let badge = document.getElementById('lb-rb-version-badge');
         if (!badge) {
@@ -1804,7 +1825,9 @@
                 fromCookie: !!_readCfgCookie(),
                 hint: 'このドメインに設定が無い可能性(localStorageはドメインごとに分離される)',
             });
-            toast('⚠️ この画面のドメインに設定がありません\n設定画面を開きます(Face IDで入力できます)', '#f57c00', 8000);
+            toast('⚠️ このサイト(' + location.hostname + ')用の設定がありません\n' +
+                  '設定は消えていません。ここで1回だけ入力してください\n' +
+                  '(パスワード欄をタップ→Face IDで入力できます)', '#f57c00', 10000);
             try { openSettingsPanel(); } catch (e) {}
             return;
         }
