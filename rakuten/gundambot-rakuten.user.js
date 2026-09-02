@@ -3,7 +3,7 @@
 // @namespace    gundam-bot.rakuten-books
 // @updateURL    https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
 // @downloadURL  https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
-// @version      3.4.0
+// @version      3.5.0
 // @description  楽天ブックスの自動購入(rakuten全ドメイン対応・iOS Safari + Userscripts拡張用)/ Build 2026-05-04 21:00 JST
 // @author       HIRO
 // @match        https://*.rakuten.co.jp/*
@@ -121,6 +121,7 @@
         debugMode:      false,
         timerEnabled:   false,
         timerHHMM:      '',
+        blockPasskey:   true,
     };
     // ★v3.3.0: 設定をドメイン横断で共有する。
     //   localStorage は origin ごとに分離されるため、books.rakuten.co.jp で保存した設定が
@@ -224,6 +225,38 @@
             try { console.log(`[GBOT-RB] ${ts} ${level} ${category}: ${message}`, detail || ''); } catch (e) {}
         } catch (e) {}
     };
+    // ★v3.5.0: ツール動作中は Face ID / パスキーのプロンプトを出させない(HIRO 要望)
+    //   楽天の新ログインUIは navigator.credentials.get() でパスキー(Face ID)を要求する。
+    //   これが出ている間はユーザー操作待ちになり、ツールのパスワード入力・
+    //   「次へ」クリックが通らず詰まる原因になる。
+    //   対策: navigator.credentials.get を上書きし「利用者がキャンセルした」と即座に返す。
+    //     → ページはパスワード入力フローにフォールバックする(＝ツールが処理できる状態)。
+    //   @grant none でページ文脈に注入されるからこそ可能な方法。
+    //   設定 blockPasskey で OFF にすれば従来どおり Face ID を使える。
+    const blockPasskeyPrompt = () => {
+        try {
+            if (!CONFIG.blockPasskey) return false;
+            if (!navigator.credentials || typeof navigator.credentials.get !== 'function') return false;
+            if (window.__lb_rb_passkey_blocked) return true;
+            const orig = navigator.credentials.get.bind(navigator.credentials);
+            navigator.credentials.get = function (opts) {
+                try {
+                    logRb('info', 'passkey', 'パスキー(Face ID)要求を抑止 → パスワード入力に誘導', {
+                        hasPublicKey: !!(opts && opts.publicKey),
+                        mediation: (opts && opts.mediation) || '',
+                    });
+                } catch (e) {}
+                // NotAllowedError = 利用者がキャンセルした時と同じ扱い。
+                // 多くの実装はこれを受けてパスワード入力へフォールバックする。
+                return Promise.reject(new DOMException('The operation was aborted.', 'NotAllowedError'));
+            };
+            window.__lb_rb_passkey_blocked = true;
+            window.__lb_rb_passkey_orig = orig;
+            logRb('info', 'passkey', 'パスキー抑止を有効化(ツール動作中のみ)');
+            return true;
+        } catch (e) { return false; }
+    };
+
     // 画面/フォームの状態をまるごと記録するヘルパー(ログイン不具合の解析用)
     const dumpFormStateRb = (label) => {
         try {
@@ -855,6 +888,8 @@
             '<label style="margin-top:12px;display:flex;align-items:center;gap:8px;color:#ddd;font-size:14px;">' +
             '<input id="lb-rb-cf-timer" type="checkbox" style="width:20px;height:20px;"' + (cur.timerEnabled ? ' checked' : '') + '>時刻発火を使う</label>' +
             '<label style="margin-top:8px;display:flex;align-items:center;gap:8px;color:#ddd;font-size:14px;">' +
+            '<input id="lb-rb-cf-passkey" type="checkbox" style="width:20px;height:20px;"' + (cur.blockPasskey ? ' checked' : '') + '>ツール動作中は Face ID を出さない(推奨)</label>' +
+            '<label style="margin-top:8px;display:flex;align-items:center;gap:8px;color:#ddd;font-size:14px;">' +
             '<input id="lb-rb-cf-test" type="checkbox" style="width:20px;height:20px;"' + (cur.testMode ? ' checked' : '') + '>テストモード(実際に買わない)</label>' +
             '<button id="lb-rb-cf-save" type="submit" style="width:100%;margin-top:16px;padding:14px;background:#ff8200;' +
             'color:#fff;border:0;border-radius:8px;font-size:16px;font-weight:bold;">💾 保存</button>' +
@@ -878,6 +913,7 @@
                 timerEnabled:   c('#lb-rb-cf-timer'),
                 testMode:       c('#lb-rb-cf-test'),
                 debugMode:      !!cur.debugMode,
+                blockPasskey:   c('#lb-rb-cf-passkey'),
             };
             if (saveConfig(next)) {
                 try { logRb('info', 'config', '設定を保存', {
@@ -1027,7 +1063,7 @@
     };
 
     // v2.9.4: バッジを目立つ赤背景にして、ログイン画面でも見落とさないようにする
-    const SCRIPT_VERSION = '3.4.0';
+    const SCRIPT_VERSION = '3.5.0';
     const renderVersionBadge = () => {
         let badge = document.getElementById('lb-rb-version-badge');
         if (!badge) {
@@ -1811,6 +1847,8 @@
         // v2.9.4: ログイン画面到達を必ず可視化(UserScript起動の証拠)
         toast(`🔐 ログイン画面検出 v${SCRIPT_VERSION}`, '#1976d2', 5000);
         logRb('info', 'login', 'ログイン画面を検出', { url: location.href.slice(0, 200), host: location.host });
+        // ★v3.5.0: 何よりも先にパスキー(Face ID)要求を抑止する
+        blockPasskeyPrompt();
         dumpFormStateRb('ログイン画面 到達直後のDOM(描画待ち前)');
 
         if (isStopped()) return;
@@ -1918,12 +1956,37 @@
         dumpFormStateRb('ログイン送信 直前のDOM');
 
         // submit ボタン探索
+        // ★v3.5.0: 実ログで新UIの送信ボタンが <div id="cta011">次へ</div> と判明。
+        //   role 属性に依存せず「見えている短いテキスト一致」で確実に拾う。
         let submitBtn = document.querySelector('button[type=submit]:not([disabled]), input[type=submit]:not([disabled])');
         if (!submitBtn) {
-            submitBtn = findByText(
-                'button, a, input, div[role="button"], span[role="button"]',
-                'ログイン', 'サインイン', '次へ'
+            const visible = (el) => {
+                try { const r = el.getBoundingClientRect();
+                    return el.offsetParent !== null && r.width > 0 && r.height > 0; } catch (e) { return false; }
+            };
+            const WORDS = ['次へ', 'ログイン', 'サインイン', '送信', '確認'];
+            const cands = document.querySelectorAll(
+                'button, a, input, div[role="button"], span[role="button"], div, span, li'
             );
+            let best = null;
+            for (const el of cands) {
+                const t = (el.innerText || el.value || '').trim();
+                if (!t || t.length > 12) continue;          // 親コンテナ(長文)の誤爆を防ぐ
+                if (!visible(el)) continue;
+                for (const w of WORDS) {
+                    if (t === w || t.includes(w)) {
+                        // より内側(子を持たない)要素を優先する
+                        if (!best || el.children.length < best.children.length) best = el;
+                        break;
+                    }
+                }
+            }
+            submitBtn = best;
+            if (submitBtn) {
+                logRb('info', 'login', '送信ボタンを特定', {
+                    tag: submitBtn.tagName, id: submitBtn.id || '',
+                    text: (submitBtn.innerText || '').trim().slice(0, 20) });
+            }
         }
 
         // v2.9.17: フルクリック(mousedown→mouseup→click)を発火。
@@ -1941,21 +2004,32 @@
         };
 
         if (submitBtn) {
+            const beforeUrl = location.href;
             fullClick(submitBtn);
+            logRb('info', 'login', '送信ボタンをクリック', {
+                tag: submitBtn.tagName, id: submitBtn.id || '' });
 
-            // 1秒後に画面遷移していなければ再試行(form submit経由)
-            await sleep(1200);
-            if (location.host === 'login.account.rakuten.com' && !isStopped()) {
-                toast('🔐 再送信(form経由)...', '#f57c00', 3000);
-                const form = pwField.closest('form');
-                if (form && typeof form.requestSubmit === 'function') {
-                    try { form.requestSubmit(); } catch (e) { try { form.submit(); } catch (e2) {} }
-                } else if (form) {
-                    try { form.submit(); } catch (e) {}
-                } else {
-                    fullClick(submitBtn);
+            // ★v3.5.0: 旧実装は 1.2 秒後に form.requestSubmit() を撃っていたが、
+            //   新UIはSPAで素のフォーム送信を想定しておらず、画面を壊して
+            //   ログアウトへ飛ぶ恐れがある(実ログで送信後に /sso/logout を確認)。
+            //   → フォーム送信のフォールバックは廃止し、クリックの再試行に留める。
+            for (let i = 0; i < 3; i++) {
+                await sleep(1200);
+                if (isStopped()) return;
+                if (location.href !== beforeUrl) {
+                    logRb('info', 'login', '✅ 送信後に画面遷移を確認', {
+                        newUrl: location.href.slice(0, 160), tries: i + 1 });
+                    return;
                 }
+                const stillThere = document.body && document.body.contains(submitBtn) &&
+                    submitBtn.getBoundingClientRect().width > 0;
+                logRb('warn', 'login', '送信後も画面が変わらない → 再クリック', {
+                    try: i + 1, buttonStillVisible: !!stillThere });
+                if (stillThere) fullClick(submitBtn); else break;
             }
+            dumpFormStateRb('送信が通らなかった時のDOM');
+            logRb('error', 'login', '送信を試みたが画面が変わらない', {
+                url: location.href.slice(0, 160) });
         } else {
             const form = pwField.closest('form');
             if (form && typeof form.requestSubmit === 'function') {
