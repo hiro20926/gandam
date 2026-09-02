@@ -3,7 +3,7 @@
 // @namespace    gundam-bot.rakuten-books
 // @updateURL    https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
 // @downloadURL  https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
-// @version      3.1.0
+// @version      3.2.0
 // @description  楽天ブックスの自動購入(rakuten全ドメイン対応・iOS Safari + Userscripts拡張用)/ Build 2026-05-04 21:00 JST
 // @author       HIRO
 // @match        https://*.rakuten.co.jp/*
@@ -960,7 +960,7 @@
     };
 
     // v2.9.4: バッジを目立つ赤背景にして、ログイン画面でも見落とさないようにする
-    const SCRIPT_VERSION = '3.1.0';
+    const SCRIPT_VERSION = '3.2.0';
     const renderVersionBadge = () => {
         let badge = document.getElementById('lb-rb-version-badge');
         if (!badge) {
@@ -1601,6 +1601,57 @@
         'パスワードを利用',
     ];
 
+    // ★v3.2.0: 新ログインUI(login.account.rakuten.com)はSPAで、描画がスクリプト起動より
+    //   後から来る。実ログ(2026-09-03 00:58:38)で、起動 6ms 時点の DOM が
+    //   inputs:[] buttons:[] hasPasswordField:false = 完全に空だったことを確認。
+    //   従来は switchToPasswordMode() がこの「空の瞬間」を一度だけ見て失敗し、
+    //   その後は出るはずのないパスワード欄を待ち続けて詰まっていた。
+    //   対策: 何かが描画されるまで待ってから探索を始める。
+    const waitForPageRender = (timeoutMs) => {
+        return new Promise((resolve) => {
+            const started = Date.now();
+            const cap = timeoutMs || 12000;
+            let done = false;
+            let obs = null, poller = null, timer = null;
+            const vis = (e) => {
+                try {
+                    const r = e.getBoundingClientRect();
+                    return e.offsetParent !== null && r.width > 0 && r.height > 0;
+                } catch (x) { return false; }
+            };
+            const rendered = () => {
+                try {
+                    if (document.querySelector('input[type=password]')) return true;
+                    const ins = Array.from(document.querySelectorAll('input')).filter(vis);
+                    if (ins.length > 0) return true;
+                    const btns = Array.from(document.querySelectorAll('button,a[role=button],div[role=button]')).filter(vis);
+                    if (btns.length > 0) return true;
+                    const txt = ((document.body && document.body.innerText) || '').trim();
+                    return txt.length >= 20;
+                } catch (x) { return false; }
+            };
+            const finish = (ok) => {
+                if (done) return;
+                done = true;
+                try { if (obs) obs.disconnect(); } catch (x) {}
+                try { if (poller) clearInterval(poller); } catch (x) {}
+                try { if (timer) clearTimeout(timer); } catch (x) {}
+                logRb(ok ? 'info' : 'warn', 'login',
+                    ok ? 'ページ描画を確認' : '描画待ちタイムアウト(空のまま)',
+                    { waitedMs: Date.now() - started });
+                resolve(ok);
+            };
+            if (rendered()) { finish(true); return; }
+            try {
+                obs = new MutationObserver(() => { if (rendered()) finish(true); });
+                obs.observe(document.documentElement || document.body,
+                    { childList: true, subtree: true, attributes: true });
+            } catch (x) {}
+            poller = setInterval(() => { if (rendered()) finish(true); }, 150);
+            timer = setTimeout(() => finish(false), cap);
+        });
+    };
+
     // パスワードモード切替リンクをクリック
     // 既にパスワード入力欄が見えている場合は何もしない(true=切替不要)
     const switchToPasswordMode = async () => {
@@ -1641,6 +1692,41 @@
             if (bestMatch) break;
         }
 
+        // ★v3.2.0: 見つからない場合、SPAの遅延描画に備えて数秒だけ再探索する
+        if (!bestMatch) {
+            const deadline = Date.now() + 5000;
+            while (Date.now() < deadline && !bestMatch) {
+                await new Promise((r) => setTimeout(r, 250));
+                if (isStopped()) return false;
+                const existing = document.querySelector('input[type=password]:not([disabled])');
+                if (existing) {
+                    const rr = existing.getBoundingClientRect();
+                    if (rr.width > 0 && rr.height > 0 && existing.offsetParent !== null) {
+                        logRb('info', 'login', '再探索中にパスワード欄が出現 → 切替不要');
+                        return true;
+                    }
+                }
+                const again = document.querySelectorAll(
+                    'a, button, div[role="button"], span[role="button"], [onclick], div, span, li, p, label'
+                );
+                for (const el of again) {
+                    const t = (el.innerText || el.value || '').trim();
+                    if (!t || t.length > 40) continue;
+                    for (const kw of PASSWORD_MODE_KEYWORDS) {
+                        if (t.includes(kw)) {
+                            const r2 = el.getBoundingClientRect();
+                            if (r2.width > 0 && r2.height > 0 && el.offsetParent !== null) { bestMatch = el; break; }
+                        }
+                    }
+                    if (bestMatch) break;
+                }
+            }
+            if (bestMatch) {
+                logRb('info', 'login', '遅延描画後に切替リンクを発見', {
+                    text: (bestMatch.innerText || '').trim().slice(0, 40) });
+            }
+        }
+
         if (bestMatch) {
             logRb('info', 'login', 'パスワードログインへ切替をクリック', {
                 text: (bestMatch.innerText || '').trim().slice(0, 40), tag: bestMatch.tagName });
@@ -1658,7 +1744,7 @@
         // v2.9.4: ログイン画面到達を必ず可視化(UserScript起動の証拠)
         toast(`🔐 ログイン画面検出 v${SCRIPT_VERSION}`, '#1976d2', 5000);
         logRb('info', 'login', 'ログイン画面を検出', { url: location.href.slice(0, 200), host: location.host });
-        dumpFormStateRb('ログイン画面 到達時のDOM');
+        dumpFormStateRb('ログイン画面 到達直後のDOM(描画待ち前)');
 
         if (isStopped()) return;
 
@@ -1666,6 +1752,11 @@
             toast('⚠️ パスワード未設定', '#f57c00', 5000);
             return;
         }
+
+        // ★v3.2.0: SPA の描画完了を待ってから探索する(空DOMを掴む問題の根治)
+        await waitForPageRender(12000);
+        if (isStopped()) return;
+        dumpFormStateRb('描画完了後のDOM(ここを見て判断する)');
 
         // v2.6: Face ID画面でも「パスワードでログイン」を自動クリックして切替
         await switchToPasswordMode();
