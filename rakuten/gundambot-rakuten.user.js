@@ -3,7 +3,7 @@
 // @namespace    gundam-bot.rakuten-books
 // @updateURL    https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
 // @downloadURL  https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
-// @version      3.8.0
+// @version      3.9.0
 // @description  楽天ブックスの自動購入(rakuten全ドメイン対応・iOS Safari + Userscripts拡張用)/ Build 2026-05-04 21:00 JST
 // @author       HIRO
 // @match        https://*.rakuten.co.jp/*
@@ -1063,7 +1063,7 @@
     };
 
     // v2.9.4: バッジを目立つ赤背景にして、ログイン画面でも見落とさないようにする
-    const SCRIPT_VERSION = '3.8.0';
+    const SCRIPT_VERSION = '3.9.0';
     const renderVersionBadge = () => {
         let badge = document.getElementById('lb-rb-version-badge');
         if (!badge) {
@@ -2047,7 +2047,7 @@
         await switchToPasswordMode();
         if (isStopped()) return;
 
-        const pwField = await waitForSelector(
+        let pwField = await waitForSelector(
             'input[type=password]:not([disabled])',
             8000
         );
@@ -2109,12 +2109,73 @@
             await sleep(50);
         }
 
-        // v2.9.17: パスワード入力後、blurでバリデーション完了を待つため少し待機
-        if (!pwField.value) {
-            suppressPasswordManager(pwField);
-            fillNative(pwField, CONFIG.password);
+        // ★v3.9.0 (HIRO 2026-09-04 ログ 00:40 で判明): パスワードが入らない問題の修正
+        //
+        //   実ログ:
+        //     00:40:35.127  段階1: cta001 クリック(成功)
+        //     00:40:35.531  段階2(パスワード)へ
+        //     00:40:35.533  パスワード入力欄を検出
+        //     00:40:35.636  ログイン送信を実行  passwordFilled:false  ← 入っていない
+        //   この時の DOM には 段階1(user_id/cta001) と 段階2(password_current/cta011) が
+        //   **同時に存在**していた = SPA の画面切替アニメーション中だった。
+        //   その最中に値を入れても React の再描画で消される。
+        //
+        //   対策:
+        //     ① 段階1 の残骸(user_id が可視 / cta001 が居る)が消えるまで待つ
+        //     ② 入れた後に本当に value が入ったか検証し、駄目なら要素を取り直して再投入
+        //   ②があるので①が空振りしても最終的に入る(二重の防御)。
+        const _pwSettle = async () => {
+            const t0 = Date.now();
+            while (Date.now() - t0 < 3000) {
+                let stage1Left = false;
+                try {
+                    const uid = document.querySelector('input#user_id, input[name=username]');
+                    const cta1 = document.getElementById('cta001');
+                    stage1Left = !!((uid && _rbVisible(uid)) || (cta1 && _rbVisible(cta1)));
+                } catch (e) {}
+                if (!stage1Left) return Date.now() - t0;
+                await sleep(100);
+            }
+            return Date.now() - t0;
+        };
+        const _settledMs = await _pwSettle();
+        logRb('info', 'login', '段階2: 画面切替の収束を待機', { waitedMs: _settledMs });
+
+        // 収束後に要素を取り直す(切替で別インスタンスに差し替わっている場合がある)
+        try {
+            const fresh = document.querySelector('input[type=password]:not([disabled])');
+            if (fresh && fresh !== pwField) {
+                logRb('info', 'login', '段階2: パスワード欄が差し替わっていたため取り直し', {
+                    id: fresh.id || '' });
+                pwField = fresh;
+            }
+        } catch (e) {}
+
+        // 入るまで最大 4 回試す(毎回 DOM から取り直す)
+        let _pwOk = false;
+        for (let i = 1; i <= 4; i++) {
+            try {
+                const cur = document.querySelector('input[type=password]:not([disabled])') || pwField;
+                pwField = cur;
+                if (!cur.value) {
+                    suppressPasswordManager(cur);
+                    fillNative(cur, CONFIG.password);
+                }
+            } catch (e) {
+                logRb('warn', 'login', '段階2: パスワード投入で例外', { attempt: i, error: String(e) });
+            }
+            await sleep(150);
+            let v = '';
+            try { v = (document.querySelector('input[type=password]') || {}).value || ''; } catch (e) {}
+            if (v) { _pwOk = true;
+                if (i > 1) logRb('info', 'login', '段階2: パスワード投入に成功', { attempt: i });
+                break; }
+            logRb('warn', 'login', '段階2: パスワードが入らなかった → 再投入', { attempt: i });
         }
-        await sleep(100); // v2.9.20 高速化: 300→100(駿河屋 v0.3.0 の実績ベース)
+        if (!_pwOk) {
+            logRb('error', 'login', '段階2: パスワードを 4 回試しても入らない', {});
+            dumpFormStateRb('失敗: パスワードが入らない');
+        }
 
         toast('🔐 ログイン送信...', '#2e7d32');
         logRb('info', 'login', 'ログイン送信を実行', {
@@ -2127,29 +2188,38 @@
         // ★v3.5.0: 実ログで新UIの送信ボタンが <div id="cta011">次へ</div> と判明。
         //   role 属性に依存せず「見えている短いテキスト一致」で確実に拾う。
         let submitBtn = document.querySelector('button[type=submit]:not([disabled]), input[type=submit]:not([disabled])');
+
+        // ★v3.9.0: 段階1(cta001) と 段階2(cta011) は切替アニメ中に **同時に DOM に居る**。
+        //   実ログ 00:40:35.637 の DOM には cta001 と cta011 が両方あった。
+        //   どちらも「次へ」なのでテキストだけでは区別できず、段階1のボタンを
+        //   押してしまう危険がある。パスワード欄が見えている = 段階2 なので、
+        //   その時は cta011 を明示的に優先する。
+        if (!submitBtn) {
+            try {
+                const pwVisible = Array.from(
+                    document.querySelectorAll('input[type=password]')
+                ).some(_rbVisible);
+                const cta011 = document.getElementById('cta011');
+                if (pwVisible && cta011 && _rbVisible(cta011)) {
+                    submitBtn = cta011;
+                    logRb('info', 'login', '送信ボタンを特定 (段階2 = cta011 を優先)', {
+                        tag: cta011.tagName, id: 'cta011',
+                        alsoHasCta001: !!document.getElementById('cta001') });
+                }
+            } catch (e) {}
+        }
+
         if (!submitBtn) {
             const visible = (el) => {
                 try { const r = el.getBoundingClientRect();
                     return el.offsetParent !== null && r.width > 0 && r.height > 0; } catch (e) { return false; }
             };
-            const WORDS = ['次へ', 'ログイン', 'サインイン', '送信', '確認'];
-            const cands = document.querySelectorAll(
-                'button, a, input, div[role="button"], span[role="button"], div, span, li'
-            );
-            let best = null;
-            for (const el of cands) {
-                const t = (el.innerText || el.value || '').trim();
-                if (!t || t.length > 12) continue;          // 親コンテナ(長文)の誤爆を防ぐ
-                if (!visible(el)) continue;
-                for (const w of WORDS) {
-                    if (t === w || t.includes(w)) {
-                        // より内側(子を持たない)要素を優先する
-                        if (!best || el.children.length < best.children.length) best = el;
-                        break;
-                    }
-                }
-            }
-            submitBtn = best;
+            // ★v3.9.0: ここは 3.7.0 で findNextButton を直した際に **取り残されていた複製**。
+            //   そのため実ログ 00:40:35.637 で再び見出し「楽天会員 ログイン」を掴んでいた:
+            //     送信ボタンを特定 {"tag":"DIV","id":"","text":"楽天会員 ログイン"}
+            //   原因は同じ(部分一致 'ログイン' が見出しにヒット)。
+            //   複製を残さず、修正済みの findNextButton に一本化する。
+            submitBtn = findNextButton();
             if (submitBtn) {
                 logRb('info', 'login', '送信ボタンを特定', {
                     tag: submitBtn.tagName, id: submitBtn.id || '',
