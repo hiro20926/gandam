@@ -3,7 +3,7 @@
 // @namespace    gundam-bot.rakuten-books
 // @updateURL    https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
 // @downloadURL  https://raw.githubusercontent.com/hiro20926/gandam/main/rakuten/gundambot-rakuten.user.js
-// @version      3.7.0
+// @version      3.8.0
 // @description  楽天ブックスの自動購入(rakuten全ドメイン対応・iOS Safari + Userscripts拡張用)/ Build 2026-05-04 21:00 JST
 // @author       HIRO
 // @match        https://*.rakuten.co.jp/*
@@ -1063,7 +1063,7 @@
     };
 
     // v2.9.4: バッジを目立つ赤背景にして、ログイン画面でも見落とさないようにする
-    const SCRIPT_VERSION = '3.7.0';
+    const SCRIPT_VERSION = '3.8.0';
     const renderVersionBadge = () => {
         let badge = document.getElementById('lb-rb-version-badge');
         if (!badge) {
@@ -1907,6 +1907,23 @@
         try { el.click(); } catch (e) {}
         try { el.dispatchEvent(new MouseEvent('click', o)); } catch (e) {}
     };
+
+    // Enterキー送信(SPAはクリックが効かなくてもEnterで進むことがある)
+    const rbPressEnter = (el) => {
+        if (!el) return;
+        const mk = (t) => new KeyboardEvent(t, {
+            bubbles: true, cancelable: true, key: 'Enter', code: 'Enter',
+            keyCode: 13, which: 13
+        });
+        try { el.focus(); } catch (e) {}
+        for (const t of ['keydown', 'keypress', 'keyup']) {
+            try { el.dispatchEvent(mk(t)); } catch (e) {}
+        }
+        try {
+            const f = el.form || el.closest('form');
+            if (f) f.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        } catch (e) {}
+    };
     // 段階1(ユーザーID入力)を処理する。処理したら true。
     const handleLoginStage1 = async () => {
         const idField = document.querySelector(
@@ -1926,24 +1943,66 @@
             fillNative(idField, CONFIG.username);
         }
         await sleep(150);
-        const nextBtn = findNextButton();
-        if (!nextBtn) {
-            logRb('error', 'login', '段階1: 「次へ」ボタンが見つからない');
-            dumpFormStateRb('失敗: 段階1の次へボタンなし');
-            return false;
+
+        // ★v3.8.0: 押し方を多段フォールバックにする。
+        //   1回の試行で終わらせず、効かなければ別の手を自動で試す。
+        const attempts = [
+            {
+                name: 'cta001を直接クリック',
+                run: () => {
+                    const el = document.querySelector('#cta001');
+                    if (!el || !_rbVisible(el)) return null;
+                    rbFullClick(el);
+                    return { tag: el.tagName, id: el.id || '' };
+                }
+            },
+            {
+                name: '「次へ」を探してクリック',
+                run: () => {
+                    const el = findNextButton();
+                    if (!el) return null;
+                    rbFullClick(el);
+                    return { tag: el.tagName, id: el.id || '',
+                             text: (el.innerText || '').trim().slice(0, 12) };
+                }
+            },
+            {
+                name: 'ID欄でEnter送信',
+                run: () => { rbPressEnter(idField); return { tag: 'ENTER', id: idField.id || '' }; }
+            },
+            {
+                name: 'cta001の内側要素をクリック',
+                run: () => {
+                    const p = document.querySelector('#cta001');
+                    if (!p) return null;
+                    const inner = p.querySelector('span, div, button, a') || p;
+                    rbFullClick(inner);
+                    return { tag: inner.tagName, id: inner.id || '', inner: true };
+                }
+            }
+        ];
+
+        let tried = 0;
+        for (const a of attempts) {
+            let info = null;
+            try { info = a.run(); } catch (e) {
+                logRb('warn', 'login', '段階1: 試行でエラー', { attempt: a.name, error: String(e) });
+            }
+            if (!info) {
+                logRb('info', 'login', '段階1: 対象なしのため次の手へ', { attempt: a.name });
+                continue;
+            }
+            tried++;
+            logRb('info', 'login', '段階1: ' + a.name, info);
+            const pw = await waitForSelector('input[type=password]:not([disabled])', 4000);
+            if (pw) {
+                logRb('info', 'login', '段階1 完了 → 段階2(パスワード)へ', { 成功した手: a.name });
+                return true;
+            }
+            logRb('warn', 'login', '段階1: この手では進まず', { attempt: a.name });
         }
-        logRb('info', 'login', '段階1: 「次へ」をクリック', {
-            tag: nextBtn.tagName, id: nextBtn.id || '', text: (nextBtn.innerText || '').trim().slice(0, 12) });
-        const beforeHtmlLen = (document.body && document.body.innerHTML.length) || 0;
-        rbFullClick(nextBtn);
-        // 段階2(パスワード欄)が出るのを待つ
-        const pw = await waitForSelector('input[type=password]:not([disabled])', 10000);
-        if (pw) {
-            logRb('info', 'login', '段階1 完了 → 段階2(パスワード)へ');
-            return true;
-        }
-        logRb('warn', 'login', '段階1: 「次へ」後にパスワード欄が出ない', {
-            htmlChanged: ((document.body && document.body.innerHTML.length) || 0) !== beforeHtmlLen });
+
+        logRb('error', 'login', '段階1: すべての手を試したがパスワード欄が出ない', { tried: tried });
         dumpFormStateRb('段階1の次へ後にパスワード欄が出ない時のDOM');
         return false;
     };
