@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.4.3.0
+// @version      0.4.4.0
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3297,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.4.3.0';
+    const SCRIPT_VERSION = '0.4.4.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -8679,6 +8679,28 @@
         try { return localStorage.getItem('LB_AM_BUYNOW_URL_' + asin) || null; }
         catch (e) { return null; }
     };
+
+    // ★案A (2026-09-04): TRANS-AM が「確実に直撃できる」状態かを判定する共通ヘルパー。
+    //   tryInstantBuyTransAm が進むための必須条件 3 つと **完全に同じ** にすること。
+    //     ① ASIN が URL から取れる  ② addressID が保存済み  ③ offerListing.1 入りの保存 URL
+    //   これが true の時だけ ?m= 切替 (ページロード 1 回) を省略する。
+    //   1 つでも欠ければ false → 従来どおり ?m= 経由 (振る舞いを変えない)。
+    //
+    //   直販保証は ?m= ではなく保存 URL 側が持つ:
+    //     保存 URL は offerListing.1 (オファー固定) と merchantID=AN1VRQENFRJN5 を自分で持ち、
+    //     その保存は if (seller.isDirect) の中でしか行われない。
+    const hasVerifiedTransAmUrl = () => {
+        try {
+            const asin = extractAsinFromUrl();
+            if (!asin) return false;
+            let addr = '';
+            try { addr = localStorage.getItem('LB_AM_ADDRESS_ID') || ''; } catch (e) { return false; }
+            if (!addr || addr.length < 6) return false;
+            const saved = getSavedTransAmUrl(asin);
+            return !!(saved && saved.length >= 100 && /offerListing\.1=/.test(saved));
+        } catch (e) { return false; }
+    };
+
     // v0.3.8.41 の URL 自動削除撤回で呼び出し元なし、将来再利用のため定義は残置
     // ★v0.3.8.44: 個別削除と整合のため ASIN_ONLY / LAST_AT も削除対象に追加
     const deleteSavedTransAmUrl = (asin) => {
@@ -12179,8 +12201,32 @@
         }
 
         toast(`⚡ TRANS-AM 発動中`, '#c41e9e', 2500);
-        // ?m= 未付与なら ?m= URL に切替 (既存と同じ)
-        if (CONFIG.autoForceAmazon && !isUrlForcedAmazon()) {
+        // ★v0.4.4.0 案A: 保存済み直販 URL があれば ?m= 切替をスキップして直撃する
+        //
+        //   背景 (HIRO 2026-09-03 報告「混雑していないのに固まった」):
+        //     TRANS-AM は Buy Box を見ず、保存済みの buynow URL へ直撃する方式。
+        //     にもかかわらず旧コードは先に商品ページを ?m= 付きで読み直しており、
+        //     ページロード 1 回分を丸々無駄にしていた (= URL 直撃の意味が消える)。
+        //     実ログ 07:36-07:37 ではそのリダイレクトが不発し 57 秒沈黙した。
+        //
+        //   直販保証は ?m= ではなく保存 URL 側が持っている (HIRO 確認済 2026-09-04):
+        //     ・保存 URL は buildBuynowUrlFromAsinAndOffer で生成され、
+        //       offerListing.1 (オファー固定) と merchantID=AN1VRQENFRJN5 を自分で持つ。
+        //     ・その保存は if (seller.isDirect) の中でしか行われない。
+        //       マケプレ業者が Buy Box に出ていれば isDirect=false なので何も保存されない。
+        //     ・確定画面の第2の壁 (マケプレ販売元の積極検出) は従来どおり働く。
+        //
+        //   スキップするのは tryInstantBuyTransAm が実際に進める条件が全て揃っている時だけ。
+        //   1 つでも欠ける場合は従来どおり ?m= 切替へ (振る舞いを変えない)。
+        const _taSkipForceM = hasVerifiedTransAmUrl();
+        if (_taSkipForceM) {
+            try { logAm('info', 'trans-am',
+                '⚡ 保存済み直販 URL あり → ?m= 切替をスキップして直撃 (ページロード 1 回分短縮)', {
+                asin: extractAsinFromUrl(), forcedM: isUrlForcedAmazon(),
+            }); } catch (e) {}
+        }
+        // ?m= 未付与なら ?m= URL に切替 (保存済み直販 URL がある場合は不要)
+        if (!_taSkipForceM && CONFIG.autoForceAmazon && !isUrlForcedAmazon()) {
             forceAmazonDirectUrl();
             return;
         }
@@ -12221,7 +12267,18 @@
         //   MODE 関係なく、商品ページ到達 + ?m= 未付与 + マケプレ判定なら自動で URL 切替
         //   ただし SESSION も MODE も触らない(STOPPED のまま、HIRO が🛒押すまで動かない原則)
         //   → リダイレクト後は URL に ?m= が付くだけ、購入は HIRO の🛒押下時のみ
-        if (CONFIG.autoForceAmazon && !isUrlForcedAmazon()) {
+        // ★案A (2026-09-04): TRANS-AM が保存済み直販 URL で直撃できる場合は
+        //   この自動 ?m= 切替を飛ばす。飛ばさないと sleep(800)+Buy Box 走査の後
+        //   location.href で return してしまい、TRANS-AM 分岐 (後方) に到達できない。
+        //   (v0.3.8.49 で session ガードに !S.isTransAmMode() を入れたのと同じ理由)
+        const _autoForceSkipForTransAm = (function () {
+            try { return S.isTransAmMode() && hasVerifiedTransAmUrl(); } catch (e) { return false; }
+        })();
+        if (_autoForceSkipForTransAm) {
+            try { logAm('info', 'trans-am',
+                '⚡ TRANS-AM 直撃可能 → handleProductPage の自動 ?m= 切替をスキップ'); } catch (e) {}
+        }
+        if (!_autoForceSkipForTransAm && CONFIG.autoForceAmazon && !isUrlForcedAmazon()) {
             try {
                 await sleep(800); // DOM 落ち着き待ち
                 const sellerInit = detectBuyBoxSeller();
