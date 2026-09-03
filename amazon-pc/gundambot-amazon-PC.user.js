@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.4.0
+// @version      1.5.0
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.4.0';
+    const SCRIPT_VERSION = 'PC-1.5.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -8927,6 +8927,72 @@
             return !!(saved && saved.length >= 100 && /offerListing\.1=/.test(saved));
         } catch (e) { return false; }
     };
+
+    // ★PC-1.5.0 確定 click 直後の「凍結」(HIRO 指示 2026-09-04)
+    //   「購入確定のあとはしばらく OFF の時間があってもいいので、確実に処理してほしい」
+    //
+    //   背景 (2026-09-03 実ログ 08:21 で実証):
+    //     08:21:26.042  在庫切れループが location.href を発火
+    //     08:21:26.471  その 429ms 後に確定 click
+    //     08:21:27.033  click の 562ms 後に別ページへ遷移確定
+    //   = 確定を撃った直後に自分で画面を飛ばしていた。
+    //   (同じ日の 18:01 は「Express Checkout モーダル検出 → 在庫切れ判定キャンセル」が
+    //    先に動いていたため干渉なし。つまりキャンセルに間に合わない経路が残っていた)
+    //
+    //   旧コードのガードは S.shouldHalt() (= 停止ボタン) だけで、
+    //   確定中かどうかを一切見ていなかった。
+    //
+    //   ※ @noframes が無いため Express Checkout の iframe 内でも本スクリプトは走る。
+    //     確定側(iframe)とループ側(トップ)が別々に動くため、
+    //     click 時刻は localStorage 経由で共有して判定する必要がある。
+    const ORDER_CONFIRM_FREEZE_MS = (function () {
+        try {
+            const v = parseInt(CONFIG.orderConfirmFreezeMs, 10);
+            if (Number.isFinite(v) && v >= 0) return v;
+        } catch (e) {}
+        return 20000;   // 確定成功時の click→thankyou は実測中央値 2.3 秒。その約 8.7 倍。
+    })();
+
+    const orderClickAgoMs = () => {
+        try {
+            const ts = parseInt(localStorage.getItem('LB_AM_LAST_ORDER_CLICK_TS') || '0', 10) || 0;
+            return ts > 0 ? (Date.now() - ts) : -1;
+        } catch (e) { return -1; }
+    };
+
+    //   凍結が必要ならその場で待ち、不要なら即戻る。
+    //   停止ボタン / thankyou 到達 では即時抜ける。
+    //   凍結は最大 ORDER_CONFIRM_FREEZE_MS で必ず解けるのでハングしない:
+    //     ・確定が通っていれば thankyou へ遷移してこのページごと消える
+    //     ・通らなければ凍結解除後に従来どおりループ再開
+    //     ・本当に固まった場合は既存の checkout-stuck-watchdog (60 秒) が回収
+    const waitOutOrderConfirmFreeze = async (whereLabel) => {
+        if (ORDER_CONFIRM_FREEZE_MS <= 0) return;
+        const ago = orderClickAgoMs();
+        let stepPlaced = false;
+        try { stepPlaced = (S.getStep() === STEP_ORDER_PLACED); } catch (e) {}
+        let remain = -1;
+        if (ago >= 0 && ago < ORDER_CONFIRM_FREEZE_MS) remain = ORDER_CONFIRM_FREEZE_MS - ago;
+        else if (stepPlaced && ago < 0) remain = ORDER_CONFIRM_FREEZE_MS;
+        if (remain <= 0) return;
+        try { logAm('warn', 'order-confirm-freeze',
+            '❄ 確定 click 直後のため navigate を凍結 (確実に処理させる)', {
+            where: whereLabel || '', clickAgoMs: ago, stepPlaced: stepPlaced,
+            freezeMs: remain, url: location.href.slice(0, 140),
+        }); } catch (e) {}
+        try { toast('❄ 注文確定の処理待ち … リトライを一時停止中', '#0288d1', 4000); } catch (e) {}
+        const deadline = Date.now() + remain;
+        while (Date.now() < deadline) {
+            if (S.shouldHalt()) return;
+            try { if (/thankyou/.test(location.pathname || '')) return; } catch (e) {}
+            await sleep(200);
+        }
+        try { logAm('info', 'order-confirm-freeze',
+            '❄ 凍結解除 → ループ再開 (thankyou 未到達 = 買えていない)', {
+            where: whereLabel || '', frozenMs: remain,
+        }); } catch (e) {}
+    };
+
 
     // v0.3.8.41 の URL 自動削除撤回で呼び出し元なし、将来再利用のため定義は残置
     // ★v0.3.8.44: 個別削除と整合のため ASIN_ONLY / LAST_AT も削除対象に追加
@@ -14745,6 +14811,11 @@
             S.opFullStop();
             return;
         }
+        // ★PC-1.5.0 確定 click 直後は navigate しない (HIRO 指示: 確実に処理させる)
+        //   ★必ず S.setStep(STEP_PURCHASING) の **手前** で判定すること。
+        //   setStep が STEP_ORDER_PLACED を上書きしてしまい、後ろだと検知できない。
+        await waitOutOrderConfirmFreeze('stock-out-loop');
+        if (S.shouldHalt()) return;
         S.setStep(STEP_PURCHASING);
 
         // 人間っぽい読み時間 (★停止ボタンを速く効かせるため 120ms 刻みで halt チェックして即中断)
