@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.4.2.2
+// @version      0.4.3.0
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3297,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.4.2.2';
+    const SCRIPT_VERSION = '0.4.3.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -3382,10 +3382,74 @@
         } catch (e) {}
 
         toast(`▶ Amazon.co.jp 直販URLに切替中…\n(?m=${AMAZON_SELLER_ID.slice(0,6)}…)`, '#1976d2', 3000);
-        setTimeout(() => {
+
+        // ★v0.4.3.0: ナビゲーション検証 + 自動再試行 (HIRO 2026-09-03「固まった」報告)
+        //
+        //   旧コードの致命的な穴:
+        //     setTimeout(200) → location.href = newUrl → return で投げっぱなし。
+        //     ナビゲーションが起きなかった場合、検証もリトライもログも一切無く
+        //     ツールは無言で死ぬ。呼び出し元 (startPurchaseTransAm / startPurchase) は
+        //     forceAmazonDirectUrl() の直後に return するため、他に動くものが無い。
+        //
+        //   実ログの証拠 (2026-09-03 朝):
+        //     07:36:05.250 perf= 6701  ?m= 切替リダイレクト
+        //     07:36:28.052 perf=29503  (同一ページのまま 23 秒経過)
+        //     07:37:02.440 perf=63891  (同一ページのまま 57 秒経過)
+        //     perfNow() はページロードごとに 0 に戻るので、値が増え続ける
+        //     = ページが一度もリロードしていない = navigate が起きていない。
+        //     HIRO はその間ボタンを 3 回押し直していた ← 体感「固まった」の正体。
+        //
+        //   対策: 撃った後に必ず結果を検証する。
+        //     - 停止で中止した場合もログに残す (旧: 完全に無言)
+        //     - 1.5 秒後に URL が変わっていなければ location.replace → reload と手を変えて再試行
+        //     - 3 回とも不発なら理由を残して停止
+        //   ナビゲーション成功時はページが破棄されタイマーごと消えるため、
+        //   正常系にはこのコードは一切影響しない。
+        const NAV_VERIFY_MS = 1500;
+        const beforeHref = location.href;
+        let navTry = 0;
+
+        const verifyNav = () => {
+            if (location.href !== beforeHref) return;   // 遷移済み = 成功
             if (S.shouldHalt()) return;
-            location.href = newUrl;
-        }, 200);
+            if (navTry >= 3) {
+                try { logAm('error', 'force-amazon-url',
+                    '?m= 切替が 3 回とも不発 → 停止 (商品ページを開き直してください)', {
+                    href: location.href.slice(0, 160), toUrl: newUrl.slice(0, 160),
+                }); } catch (e) {}
+                toast('⚠️ URL 切替に失敗しました\n商品ページを開き直してください', STOP_RED, 10000);
+                try { S.opFullStop(); } catch (e) {}
+                return;
+            }
+            try { logAm('warn', 'force-amazon-url',
+                '?m= 切替が不発 (URL 変化なし) → 再試行', {
+                navTry: navTry, waitedMs: NAV_VERIFY_MS,
+                nextMethod: navTry === 1 ? 'location.replace' : 'location.reload',
+            }); } catch (e) {}
+            fireNav();
+        };
+
+        function fireNav() {
+            if (S.shouldHalt()) {
+                try { logAm('warn', 'force-amazon-url',
+                    '?m= 切替を中止 (停止状態) ← 旧版はここで無言で死んでいた', {
+                    mode: S.getMode(), navTry: navTry,
+                }); } catch (e) {}
+                return;
+            }
+            navTry++;
+            try {
+                if (navTry === 1)      location.href = newUrl;
+                else if (navTry === 2) location.replace(newUrl);
+                else                   location.reload();
+            } catch (e) {
+                try { logAm('error', 'force-amazon-url', '?m= 切替 navigate が例外', {
+                    navTry: navTry, error: String(e) }); } catch (e2) {}
+            }
+            setTimeout(verifyNav, NAV_VERIFY_MS);
+        }
+
+        setTimeout(fireNav, 200);
         return true;
     };
 
@@ -14093,23 +14157,19 @@
                 //   旧: この判定が if(getEffectiveQtyStop()) の中だったため OFF だと素通りし、
                 //       成功後もループ継続(「確定前で止まる」誤解 + 二重購入リスク)になっていた。
                 if (wasRecentClick) {
-                    try { logAm('warn', 'order-complete',
-                        '✅ 注文成功確認 (直近 click 後の数量更新検出 = 重複防止) → 完全停止', {
+                    // ★v0.4.3.0: PC-1.2.8 と同じ修正を iOS にも適用(HIRO 2026-09-03 報告)
+                    //   数量更新 + 直近click でも /gp/buy/thankyou/ 未到達 = 注文は確定していない。
+                    //   旧コードはこれを「✅注文成功」と誤判定し完全停止していた → 買えていないのに止まる。
+                    //   実例 22:06:27 : 着地先は itemselect 画面(数量選択)であり thankyou ではない。
+                    //   本物の成功判定は handleOrderComplete (/thankyou/ 到達) のみ。
+                    try { logAm('warn', 'qty-update',
+                        '⚠ 直近click後の数量更新検出だが /thankyou/ 未到達 = 注文未確定(混戦負けの可能性) → ループ継続(自動復帰)', {
                         url: location.href.slice(0, 200),
                         clickAgoMs: recentClickAgo,
-                        qtyStop: getEffectiveQtyStop(),
                     }); } catch (e) {}
-                    try {
-                        toast('✅ 注文成功!\n(直近 click 後の重複防止メッセージで成功確認)\n' +
-                              '自動停止しました、次は🛒で新規開始',
-                              BUY_GREEN, 15000);
-                    } catch (e) {}
-                    try { S.setStep(STEP_ORDER_PLACED); } catch (e) {}
                     try { localStorage.removeItem('LB_AM_LAST_ORDER_CLICK_TS'); } catch (e) {}
-                    try { S.opFullStop(); } catch (e) {}
-                    return;
                 }
-                if (getEffectiveQtyStop()) {
+                if (getEffectiveQtyStop() && !wasRecentClick) {
                     try { logAm('error', 'qty-update',
                         '「数量更新」検出 (handleStockOutBuyNow 同期チェック) + qtyStop=ON → 完全停止', {
                         url: location.href.slice(0, 200),
@@ -15197,23 +15257,19 @@
                     // ★v0.3.8.99: 注文成功検出を qty_stop の外(最優先)へ(2箇所目)
                     //   直近 click + 数量更新 = 注文が通った事実 → qty_stop=ON/OFF どちらでも停止。
                     if (wasRecentClick) {
-                        try { logAm('warn', 'order-complete',
-                            '✅ 注文成功確認 (直近 click 後の数量更新検出 = 重複防止) → 完全停止', {
+                        // ★v0.4.3.0: PC-1.2.8 と同じ修正を iOS にも適用(HIRO 2026-09-03 報告)
+                        //   数量更新 + 直近click でも /gp/buy/thankyou/ 未到達 = 注文は確定していない。
+                        //   旧コードはこれを「✅注文成功」と誤判定し完全停止していた → 買えていないのに止まる。
+                        //   実例 22:06:27 : 着地先は itemselect 画面(数量選択)であり thankyou ではない。
+                        //   本物の成功判定は handleOrderComplete (/thankyou/ 到達) のみ。
+                        try { logAm('warn', 'qty-update',
+                            '⚠ 直近click後の数量更新検出だが /thankyou/ 未到達 = 注文未確定(混戦負けの可能性) → ループ継続(自動復帰)', {
                             url: location.href.slice(0, 200),
                             clickAgoMs: recentClickAgo,
-                            qtyStop: getEffectiveQtyStop(),
                         }); } catch (e) {}
-                        try {
-                            toast('✅ 注文成功!\n(直近 click 後の重複防止メッセージで成功確認)\n' +
-                                  '自動停止しました、次は🛒で新規開始',
-                                  BUY_GREEN, 15000);
-                        } catch (e) {}
-                        try { S.setStep(STEP_ORDER_PLACED); } catch (e) {}
                         try { localStorage.removeItem('LB_AM_LAST_ORDER_CLICK_TS'); } catch (e) {}
-                        try { S.opFullStop(); } catch (e) {}
-                        return;
                     }
-                    if (getEffectiveQtyStop()) {
+                    if (getEffectiveQtyStop() && !wasRecentClick) {
                         try { logAm('error', 'qty-update',
                             '「数量更新」検出 (OTHER 同期チェック) + qtyStop=ON → 完全停止', {
                             url: location.href.slice(0, 200),
