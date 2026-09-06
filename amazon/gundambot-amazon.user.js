@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.4.5.0
+// @version      0.4.5.1
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3297,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.4.5.0';
+    const SCRIPT_VERSION = '0.4.5.1';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -15075,6 +15075,15 @@
             logAm('info', 'main', `v${SCRIPT_VERSION} 起動 (screen=${screen})`, {
                 screen: screen,
                 profile: CONFIG.profileName || '',
+                // ★環境実測 (2026-09-06): これまで PC 版のログに UA が一度も残っておらず、
+                //   「PC は desktop UA なのにモバイル用の決済 URL を叩いている」という
+                //   推測を裏付けられなかった。以後は毎起動で実測値を残す。
+                //   (既存の collectAodEnvSnapshot は AOD 経路でしか動かず、
+                //    TRANS-AM 運用では一度も通らないため記録が無かった)
+                ua: (navigator.userAgent || '').slice(0, 150),
+                isMobileUA: /iPhone|iPad|Android|Mobile/i.test(navigator.userAgent || ''),
+                viewport: (function () { try { return window.innerWidth + 'x' + window.innerHeight; } catch (e) { return '?'; } })(),
+                mobileTurboParams: '(iOS版は常にモバイル)',
                 url: location.href.slice(0, 200),
                 mode: S.getMode(),
                 step: S.getStep(),
