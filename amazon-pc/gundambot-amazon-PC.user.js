@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.11.0
+// @version      1.12.0
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.11.0';
+    const SCRIPT_VERSION = 'PC-1.12.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -15460,8 +15460,11 @@
                         try { _clickedAlready = (S.getStep && S.getStep() === STEP_ORDER_PLACED); } catch (e) {}
                         if (_clickedAlready) {
                             const _afterClickMs = (function () {
-                                try { const v = parseInt(CONFIG.checkoutStuckAfterClickMs, 10); if (Number.isFinite(v) && v >= 30000) return v; } catch (e) {}
-                                return 60000;
+                                // ★PC-1.12.0: 60 秒 → 15 秒。注文はサーバ側で成立していることが
+                                //   分かったので、長く待つ意味が無く、HIRO を待たせるだけだった。
+                                //   成功時の click→完了は実測中央値 2.3 秒なので 15 秒は約 6.5 倍。
+                                try { const v = parseInt(CONFIG.checkoutStuckAfterClickMs, 10); if (Number.isFinite(v) && v >= 5000) return v; } catch (e) {}
+                                return 15000;
                             })();
                             let _sinceStart = 0;
                             try { _sinceStart = Date.now() - (window.__gbot_am_page_start__ || Date.now()); } catch (e) {}
@@ -15481,8 +15484,37 @@
                         // 直近の確定 click から 20 秒以内なら、まだ結果待ちの可能性 → 見送る
                         try {
                             const _ts = parseInt(localStorage.getItem('LB_AM_LAST_ORDER_CLICK_TS') || '0', 10) || 0;
-                            if (_ts > 0 && (Date.now() - _ts) < 20000) return;
+                            // ★PC-1.12.0: 15 秒発火に合わせて 20 秒 → 12 秒
+                            if (_ts > 0 && (Date.now() - _ts) < 12000) return;
                         } catch (e) {}
+                        // ★PC-1.12.0 (HIRO 報告 2026-09-06):
+                        //   「購入情報は飛んでいるが、画面が切り替わらない」
+                        //   実ログで裏取り済み: 18:30:24 確定click → 画面変わらず →
+                        //   18:31:19 HIRO が注文履歴を開くと 250-3... の注文が存在し、
+                        //   キャンセル画面まで進んでいた。= 注文はサーバ側で成立していた。
+                        //
+                        //   従来この後「商品ページに戻って監視継続」していたが、それは
+                        //   **注文済みなのに買い直しに行く**動作であり二重購入の危険がある。
+                        //   確定 click を撃った後に画面が変わらない場合は、
+                        //     ① 注文履歴へ移動して HIRO が結果を目視できるようにする
+                        //     ② ループは再開せず完全停止する
+                        //   に変更する。撃っていない場合(ボタン未検出等)は従来どおり復帰。
+                        if (_clickedAlready) {
+                            try { logAm('warn', 'checkout-stuck-watchdog',
+                                '⚠ 確定 click 済みだが画面が切り替わらない → 注文履歴へ移動して停止'
+                                + '(注文が成立している可能性が高い。二重購入を避けるためループは再開しない)', {
+                                screen: scr, url: location.href.slice(0, 150),
+                                waitedMs: _ckWaitMs }); } catch (e) {}
+                            try { toast('📦 注文を送信済みですが画面が変わりません\n'
+                                + '→ 注文履歴を開きます。購入できているか確認してください\n'
+                                + '(二重購入防止のため停止します)', '#f57c00', 15000); } catch (e) {}
+                            try { window.stop(); } catch (e) {}
+                            try { S.opFullStop(); } catch (e) {}
+                            try {
+                                location.href = 'https://www.amazon.co.jp/gp/css/order-history?ref_=gbot_after_order';
+                            } catch (e) {}
+                            return;
+                        }
                         try { logAm('warn', 'checkout-stuck-watchdog',
                             '⏱ 確定画面に ' + Math.round(_ckWaitMs / 1000) + ' 秒留まったまま(買えなかった)→ 登録商品URLに戻って監視継続', {
                             screen: scr, url: location.href.slice(0, 150) }); } catch (e) {}

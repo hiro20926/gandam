@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.4.6.0
+// @version      0.4.7.0
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3297,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.4.6.0';
+    const SCRIPT_VERSION = '0.4.7.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -14903,8 +14903,9 @@
                         try { _clickedAlready = (S.getStep && S.getStep() === STEP_ORDER_PLACED); } catch (e) {}
                         if (_clickedAlready) {
                             const _afterClickMs = (function () {
-                                try { const v = parseInt(CONFIG.checkoutStuckAfterClickMs, 10); if (Number.isFinite(v) && v >= 30000) return v; } catch (e) {}
-                                return 60000;
+                                // ★v0.4.7.0: 60 秒 → 15 秒（注文はサーバ側で成立しているため長く待つ意味が無い）
+                                try { const v = parseInt(CONFIG.checkoutStuckAfterClickMs, 10); if (Number.isFinite(v) && v >= 5000) return v; } catch (e) {}
+                                return 15000;
                             })();
                             let _sinceStart = 0;
                             try { _sinceStart = Date.now() - (window.__gbot_am_page_start__ || Date.now()); } catch (e) {}
@@ -14924,10 +14925,34 @@
                         // 直近の確定 click から 20 秒以内なら、まだ結果待ちの可能性 → 見送る
                         try {
                             const _ts = parseInt(localStorage.getItem('LB_AM_LAST_ORDER_CLICK_TS') || '0', 10) || 0;
-                            if (_ts > 0 && (Date.now() - _ts) < 20000) return;
+                            // ★v0.4.7.0: 15 秒発火に合わせて 20 秒 → 12 秒
+                            if (_ts > 0 && (Date.now() - _ts) < 12000) return;
                         } catch (e) {}
                         let _u = '';
                         try { const _s = S.getSession(); if (_s && _s.productUrl) _u = _s.productUrl; } catch (e) {}
+                        // ★v0.4.7.0 (HIRO 報告 2026-09-06 / PC で実証):
+                        //   「購入情報は飛んでいるが画面が切り替わらない」ケースが実在する。
+                        //   PC 実ログ 18:30:24 確定click → 画面変わらず →
+                        //   18:31:19 注文履歴に 250-3... の注文が実在しキャンセル画面まで進んだ。
+                        //   確定を撃った後に画面が変わらない時に商品ページへ戻ると
+                        //   **注文済みなのに買い直す**ため二重購入の危険がある。
+                        //   → 注文履歴へ移動して停止する。撃っていない場合は従来どおり復帰。
+                        if (_clickedAlready) {
+                            try { logAm('warn', 'checkout-stuck-watchdog',
+                                '⚠ 確定 click 済みだが画面が切り替わらない → 注文履歴へ移動して停止'
+                                + '(注文が成立している可能性が高い。二重購入を避けるためループは再開しない)', {
+                                screen: scr, url: location.href.slice(0, 150),
+                                waitedMs: _ckWaitMs }); } catch (e) {}
+                            try { toast('📦 注文を送信済みですが画面が変わりません\n'
+                                + '→ 注文履歴を開きます。購入できているか確認してください\n'
+                                + '(二重購入防止のため停止します)', '#f57c00', 15000); } catch (e) {}
+                            try { window.stop(); } catch (e) {}
+                            try { S.opFullStop(); } catch (e) {}
+                            try {
+                                location.href = 'https://www.amazon.co.jp/gp/css/order-history?ref_=gbot_after_order';
+                            } catch (e) {}
+                            return;
+                        }
                         try { logAm('warn', 'checkout-stuck-watchdog',
                             '⏱ 確定画面に ' + Math.round(_ckWaitMs / 1000) + ' 秒留まったまま(買えなかった)→ 商品ページに戻って監視継続', {
                             screen: scr, url: location.href.slice(0, 150), hasBackUrl: !!_u }); } catch (e) {}
