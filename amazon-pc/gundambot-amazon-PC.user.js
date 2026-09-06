@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.9.0
+// @version      1.9.1
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.9.0';
+    const SCRIPT_VERSION = 'PC-1.9.1';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -14009,13 +14009,26 @@
         return true;
     };
 
-    // ★PC-1.9.0: 確定画面の描画待ち上限 (ms)。0 で無効=従来どおり即 click。
+    // ★PC-1.9.1: 確定画面の描画待ち上限 (ms)。既定 0 = 待たない（従来どおり即 click）。
+    //
+    //   PC-1.9.0 で既定 2500ms にしたのは判断ミスだった。
+    //   HIRO 指摘「なんで金額が読めるまで待つ必要があるんですか？」の通り、
+    //   金額は購入に必要な情報ではなく「描画が終わったか」の代理指標にすぎない。
+    //   そして PC で金額が読めない理由が
+    //     (a) まだ描画されていない        → 待てば直る
+    //     (b) PC の画面は文言/構造が違う   → 待っても無駄。2.5 秒遅くなるだけ
+    //   のどちらかを、**判別できないまま**待ちを入れてしまった。
+    //   (b) だった場合は在庫争奪で不利になるだけの害になる。
+    //
+    //   よって既定は 0（待たない）に戻し、代わりに click 時点の画面本文を
+    //   dump して (a)/(b) を次の 1 回で確定させる。判明後に必要なら
+    //   CONFIG.checkoutRenderWaitMs で待ちを有効化する。
     const CHECKOUT_RENDER_WAIT_MS = (function () {
         try {
             const v = parseInt(CONFIG.checkoutRenderWaitMs, 10);
             if (Number.isFinite(v) && v >= 0) return v;
         } catch (e) {}
-        return 2500;
+        return 0;
     })();
 
     // ★PC-1.9.0: 確定画面が「本当に描画し終わっているか」を待つ (HIRO 2026-09-06)
@@ -14124,10 +14137,27 @@
         try {
             logAm('info', 'checkout', `SPC: 「注文を確定する」検出(待機 ${waitMs}ms)`);
         } catch (e) {}
-        // ★PC-1.9.0: ボタンが在っても画面が描画し切っていない事がある。
-        //   金額が読めるまで最大 2.5 秒だけ待ってから click する。
-        await waitCheckoutRendered(document, CHECKOUT_RENDER_WAIT_MS);
-        if (isStopped()) return;
+        // ★PC-1.9.1: click 時点の確定画面の本文を記録する（待たない = 遅延ゼロ）。
+        //   PC は verify で total=null / Amazon発送の表示なし が 6/6 で出るのに対し、
+        //   iOS は total が必ず取れている。その原因が「未描画」なのか
+        //   「PC の画面は文言が違う」のかを、この dump 1 回で確定させる。
+        try {
+            const _t = (document.body ? (document.body.innerText || '') : '');
+            logAm('info', 'checkout-page-dump', '確定画面の本文 (click 直前・原因究明用)', {
+                len: _t.length,
+                hasSeikyu: _t.indexOf('ご請求額') >= 0,
+                hasGokei: _t.indexOf('合計') >= 0,
+                hasYen: /[¥￥]\s*[\d,]+/.test(_t),
+                hasHassou: _t.indexOf('発送') >= 0,
+                hasHanbaimoto: _t.indexOf('販売元') >= 0,
+                head: _t.slice(0, 1200),
+            });
+        } catch (e) {}
+        // 描画待ちは既定 0（無効）。CONFIG.checkoutRenderWaitMs を設定した時だけ待つ。
+        if (CHECKOUT_RENDER_WAIT_MS > 0) {
+            await waitCheckoutRendered(document, CHECKOUT_RENDER_WAIT_MS);
+            if (isStopped()) return;
+        }
         await performOrderConfirm(document, 'SPC 注文確認画面');
     };
 
