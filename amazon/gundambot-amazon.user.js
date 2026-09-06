@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.4.7.0
+// @version      0.4.8.0
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3297,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.4.7.0';
+    const SCRIPT_VERSION = '0.4.8.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -6995,6 +6995,97 @@
             return false;
         }
     };
+    // ★v1.13.0 (HIRO 指摘 2026-09-06「購入確定押した場合は戻らないの？」)
+    //
+    //   1.12.0 は「確定 click 後に画面が変わらない → 注文履歴へ行って停止」にしたが、
+    //   実際には混戦に負けていて注文が成立していない場合まで止まってしまい、
+    //   在庫の追跡をやめてしまう。それは機会損失。
+    //
+    //   推測で止める/続けるを決めるのではなく、**注文履歴で実際に買えたかを確認**して分岐する:
+    //     買えていた   → 完全停止（二重購入を防ぐ）
+    //     買えていない → 商品ページへ戻ってループ再開（狩りを続ける）
+    //
+    //   確認方法: 注文履歴ページ内に対象 ASIN が出てくるかを見る。
+    //   Amazon の注文履歴は商品リンク (/dp/<ASIN> や /gp/product/<ASIN>) を含む。
+    const ORDER_CHECK_KEY = 'LB_AM_ORDER_CHECK';
+
+    const armOrderCheck = (asin, productUrl) => {
+        try {
+            localStorage.setItem(ORDER_CHECK_KEY, JSON.stringify({
+                asin: asin || '', productUrl: productUrl || '', at: Date.now(),
+            }));
+        } catch (e) {}
+    };
+
+    const readOrderCheck = () => {
+        try {
+            const raw = localStorage.getItem(ORDER_CHECK_KEY);
+            if (!raw) return null;
+            const o = JSON.parse(raw);
+            if (!o || !o.at) return null;
+            if (Date.now() - o.at > 10 * 60 * 1000) {   // 10 分で失効
+                try { localStorage.removeItem(ORDER_CHECK_KEY); } catch (e) {}
+                return null;
+            }
+            return o;
+        } catch (e) { return null; }
+    };
+
+    const clearOrderCheck = () => {
+        try { localStorage.removeItem(ORDER_CHECK_KEY); } catch (e) {}
+    };
+
+    //   注文履歴ページで「本当に買えたか」を判定して分岐する。
+    //   注文履歴の反映が一瞬遅れることがあるので最大 8 秒だけ再確認する。
+    const handleOrderHistoryCheck = async () => {
+        const chk = readOrderCheck();
+        if (!chk) return false;                 // このページは通常閲覧 → 何もしない
+        const asin = String(chk.asin || '');
+        try { logAm('info', 'order-check', '注文履歴で購入成否を確認中', {
+            asin: asin, productUrl: String(chk.productUrl || '').slice(0, 120) }); } catch (e) {}
+        try { toast('🔎 注文履歴で購入できたか確認中…', '#0288d1', 6000); } catch (e) {}
+
+        let found = false;
+        const t0 = Date.now();
+        while (Date.now() - t0 < 8000) {
+            try {
+                const html = document.body ? (document.body.innerHTML || '') : '';
+                if (asin && html.indexOf(asin) >= 0) { found = true; break; }
+            } catch (e) {}
+            await sleep(500);
+        }
+        const waited = Date.now() - t0;
+        clearOrderCheck();
+
+        if (found) {
+            try { logAm('info', 'order-check',
+                '✅ 注文履歴に対象 ASIN を確認 → 購入成功。完全停止する(二重購入防止)', {
+                asin: asin, waitedMs: waited }); } catch (e) {}
+            try { toast('✅ 購入できています（注文履歴で確認）\n停止します', BUY_GREEN, 20000); } catch (e) {}
+            try { S.opFullStop(); } catch (e) {}
+            return true;
+        }
+
+        try { logAm('warn', 'order-check',
+            '❌ 注文履歴に対象 ASIN が無い = 買えていない → 商品ページへ戻って監視を再開する', {
+            asin: asin, waitedMs: waited }); } catch (e) {}
+        try { toast('❌ 買えていませんでした（注文履歴に無し）\n監視を再開します', '#f57c00', 8000); } catch (e) {}
+        let back = '';
+        try { back = String(chk.productUrl || ''); } catch (e) {}
+        if (!back) { try { const s2 = S.getSession(); if (s2 && s2.productUrl) back = s2.productUrl; } catch (e) {} }
+        if (!back) {
+            try { logAm('warn', 'order-check', '戻り先 URL が無く再開できない'); } catch (e) {}
+            return true;
+        }
+        try {
+            const u = new URL(back);
+            u.searchParams.set('_pageRefresh', String(Date.now()));
+            if (CONFIG.autoForceAmazon) u.searchParams.set('m', AMAZON_SELLER_ID);
+            location.href = u.toString();
+        } catch (e) { try { location.href = back; } catch (e2) {} }
+        return true;
+    };
+
 
     const detectScreen = () => {
         const path = location.pathname;
@@ -14944,10 +15035,23 @@
                                 screen: scr, url: location.href.slice(0, 150),
                                 waitedMs: _ckWaitMs }); } catch (e) {}
                             try { toast('📦 注文を送信済みですが画面が変わりません\n'
-                                + '→ 注文履歴を開きます。購入できているか確認してください\n'
-                                + '(二重購入防止のため停止します)', '#f57c00', 15000); } catch (e) {}
+                                + '→ 注文履歴で購入できたか自動確認します\n'
+                                + '(買えていれば停止 / 買えていなければ監視を再開)', '#f57c00', 12000); } catch (e) {}
                             try { window.stop(); } catch (e) {}
-                            try { S.opFullStop(); } catch (e) {}
+                            // ★v1.13.0: ここで止め切らず、注文履歴で「本当に買えたか」を
+                            //   確認してから 停止/再開 を決める(armOrderCheck が目印)。
+                            try {
+                                let _asin = '';
+                                try { _asin = extractAsinFromUrl() || ''; } catch (e) {}
+                                let _pu = '';
+                                try { const _s2 = S.getSession(); if (_s2 && _s2.productUrl) _pu = _s2.productUrl; } catch (e) {}
+                                if (!_asin && _pu) {
+                                    const _m = _pu.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/);
+                                    if (_m) _asin = _m[1];
+                                }
+                                armOrderCheck(_asin, _pu);
+                            } catch (e) {}
+                            try { S.setStep(STEP_IDLE); } catch (e) {}
                             try {
                                 location.href = 'https://www.amazon.co.jp/gp/css/order-history?ref_=gbot_after_order';
                             } catch (e) {}
@@ -15511,6 +15615,15 @@
         if (screen === 'STOCK_OUT_BUYNOW') {
             try { resetTransAmErrCount(); } catch (e) {}
         }
+
+        // ★v1.13.0: 注文履歴ページに armOrderCheck 済みで来た場合は、
+        //   購入できたかを判定して 停止/再開 を決める（通常閲覧時は素通り）。
+        try {
+            if (/\/gp\/css\/order-history|\/your-orders\/orders/.test(location.pathname)) {
+                const _handled = await handleOrderHistoryCheck();
+                if (_handled) return;
+            }
+        } catch (e) {}
 
         switch (screen) {
             case 'CART_ADD_FAIL': await handleCartAddFail(); break;  // ★v0.1.16.13
