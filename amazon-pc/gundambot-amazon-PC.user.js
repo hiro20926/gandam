@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.9.1
+// @version      1.10.0
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.9.1';
+    const SCRIPT_VERSION = 'PC-1.10.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -9428,6 +9428,14 @@
     //           パイプラインを選ばせる。PC 版の既定はこちら。
     //   ※ この URL は在庫判定(oos 判定)にも使われるため、挙動が変わったら
     //     このフラグを true に戻せば従来の動作に戻せる。
+    // ★PC-1.10.0 (2026-09-06): PC-1.7.0 を撤回し true に戻す。
+    //   撤回理由: HIRO 提供の 8/26 ログで、PC は **このパラメータ付きの URL のまま
+    //   実際に購入に成功していた**ことが確認できた (21:37:49 ✅注文完了画面到達)。
+    //     21:37:37 /checkout/entry/buynow?ref_=dp_mw_buy_now_...  [モバイルURL]
+    //       → 在庫あり → /gp/cart/view.html → 「レジに進む」
+    //       → /checkout/entry/cart?proceedToCheckout=1 → 確定click → thankyou
+    //   PC-1.7.0 は「PC で成功例が 0 件」という私の誤った前提で作った変更だった。
+    //   実際には手元に無い PC ログがあり、成功していた。既定を元に戻す。
     const MOBILE_TURBO_PARAMS = (function () {
         try {
             if (typeof CONFIG !== 'undefined' && CONFIG &&
@@ -9435,7 +9443,7 @@
                 return CONFIG.mobileTurboParams;
             }
         } catch (e) {}
-        return false;   // PC 既定: モバイル専用パラメータを付けない
+        return true;   // 8/26 に実際に買えていた時と同じ URL に戻す
     })();
 
 
@@ -12605,7 +12613,15 @@
         //
         //   スキップするのは tryInstantBuyTransAm が実際に進める条件が全て揃っている時だけ。
         //   1 つでも欠ける場合は従来どおり ?m= 切替へ (振る舞いを変えない)。
-        const _taSkipForceM = hasVerifiedTransAmUrl();
+        // ★PC-1.10.0: 案A(?m= 切替スキップ)も既定 OFF に戻す。
+        //   8/26 に買えていた 1.2.8 には無かった変更なので、
+        //   購入パスを当時の状態に揃える。CONFIG.skipForceMOnTransAm = true で再有効化。
+        const _taSkipForceM = (function () {
+            try {
+                if (CONFIG && CONFIG.skipForceMOnTransAm === true) return hasVerifiedTransAmUrl();
+            } catch (e) {}
+            return false;
+        })();
         if (_taSkipForceM) {
             try { logAm('info', 'trans-am',
                 '⚡ 保存済み直販 URL あり → ?m= 切替をスキップして直撃 (ページロード 1 回分短縮)', {
@@ -12659,7 +12675,11 @@
         //   location.href で return してしまい、TRANS-AM 分岐 (後方) に到達できない。
         //   (v0.3.8.49 で session ガードに !S.isTransAmMode() を入れたのと同じ理由)
         const _autoForceSkipForTransAm = (function () {
-            try { return S.isTransAmMode() && hasVerifiedTransAmUrl(); } catch (e) { return false; }
+            // ★PC-1.10.0: 既定 OFF (8/26 に買えていた頃の挙動に戻す)
+            try {
+                if (!(CONFIG && CONFIG.skipForceMOnTransAm === true)) return false;
+                return S.isTransAmMode() && hasVerifiedTransAmUrl();
+            } catch (e) { return false; }
         })();
         if (_autoForceSkipForTransAm) {
             try { logAm('info', 'trans-am',
