@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.5.0
+// @version      1.6.0
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.5.0';
+    const SCRIPT_VERSION = 'PC-1.6.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -11478,6 +11478,14 @@
             _aodCartAddApiOkAt = 0;
         } catch (e) {}
 
+        // ★PC-1.6.0: iOS v0.4.0.1 を移植 (HIRO 指摘 2026-09-06「両版でロジックが違う」)。
+        //   AOD 走査は非 Amazon 出品者を除外済み(nonAmazonSkipped)なので、
+        //   ここで「直販確認済み」を記録しておくのは安全。
+        //   これが無いと SPC 確定画面で販売元表示が欠けた時に
+        //   performOrderConfirm の failsafe が verifiedRecent=false となり、
+        //   「注文を確定する」を見つけているのに click 前で止まる。
+        try { localStorage.setItem('LB_AM_VERIFIED_DIRECT', String(Date.now())); } catch (e) {}
+
         // ★ 単発 click (駿河屋 v0.1.6 教訓: 二重押下絶対禁止)
         try {
             cartButton.click();
@@ -13932,14 +13940,50 @@
         const skipInitialSleep = !!(opts && opts.skipInitialSleep);
         try { logAm('info', 'handler', 'handleCheckout (SPC) 入室' + (skipInitialSleep ? ' [初期 sleep スキップ]' : '')); } catch (e) {}
         if (!skipInitialSleep) await sleep(1500);
-        let placeBtn = null;
+
+        // ★PC-1.6.0: iOS v0.3.9.6 の確定ボタン検出を PC に移植 (HIRO 指摘 2026-09-06)
+        //   「PC版とIOS版で購入確定ボタンを押すロジックが異なっている可能性が高い」→ 実際に違っていた。
+        //
+        //   旧 PC: 500ms ポーリング × 10 回 (= 最長 5 秒、最悪 500ms 出遅れる)
+        //   iOS  : ①先に即時チェック ②MutationObserver で出現の瞬間に反応
+        //          ③50ms の保険ポーリング ④タイムアウト 10 秒
+        //
+        //   実ログの裏付け: iOS は確定 click → /thankyou/ 到達まで実測 2.06 秒で成功している
+        //   (2026-09-03 07:37:04.494 click → 07:37:06.557 完了)。
+        //   ミリ秒単位の出遅れが勝敗を分ける場面なので、iOS 側に揃える。
+        let placeBtn = findPlaceOrderButton(document);   // 既に出ていれば即決
         let waitMs = 0;
-        for (let i = 0; i < 10; i++) {
-            if (isStopped()) return;
-            placeBtn = findPlaceOrderButton(document);
-            if (placeBtn) { waitMs = i * 500; break; }
-            await sleep(500);
+        if (!placeBtn) {
+            const _t0 = Date.now();
+            placeBtn = await new Promise((resolve) => {
+                let done = false;
+                let obs = null, iv = null, to = null;
+                const finish = (el) => {
+                    if (done) return;
+                    done = true;
+                    try { if (obs) obs.disconnect(); } catch (e) {}
+                    try { if (iv) clearInterval(iv); } catch (e) {}
+                    try { if (to) clearTimeout(to); } catch (e) {}
+                    resolve(el || null);
+                };
+                const check = () => {
+                    if (isStopped()) { finish(null); return; }
+                    let el = null;
+                    try { el = findPlaceOrderButton(document); } catch (e) {}
+                    if (el) finish(el);
+                };
+                try {
+                    obs = new MutationObserver(check);
+                    obs.observe(document.documentElement || document.body,
+                        { childList: true, subtree: true, attributes: true });
+                } catch (e) {}
+                iv = setInterval(check, 50);                 // 保険ポーリング
+                to = setTimeout(() => finish(null), 10000);  // タイムアウト 10 秒
+                check();                                     // 初回即チェック
+            });
+            waitMs = Date.now() - _t0;
         }
+        if (isStopped()) return;
         if (!placeBtn) {
             // ★v0.1.16.8: SPC ボタン未検出は error
             try {
