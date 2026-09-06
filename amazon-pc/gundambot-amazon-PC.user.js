@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.13.0
+// @version      1.14.0
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.13.0';
+    const SCRIPT_VERSION = 'PC-1.14.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -7246,16 +7246,47 @@
             asin: asin, productUrl: String(chk.productUrl || '').slice(0, 120) }); } catch (e) {}
         try { toast('🔎 注文履歴で購入できたか確認中…', '#0288d1', 6000); } catch (e) {}
 
+        // ★v1.14.0 弱点修正: ASIN が履歴のどこかに在るだけでは
+        //   「今回の注文」とは限らない（以前に同じ商品を買っていれば誤って成功判定になる）。
+        //   注文履歴は新しい順に並ぶので、ASIN の直前 4000 文字以内に
+        //   **今日の日付** が出ていることを条件に加える = 直近の注文カード内に限定する。
+        const _today = (function () {
+            try {
+                const d = new Date();
+                return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日';
+            } catch (e) { return ''; }
+        })();
+        const _isTodaysOrder = (html, idx) => {
+            if (!_today) return true;                 // 日付が作れない環境では従来どおり
+            const from = Math.max(0, idx - 4000);
+            return html.slice(from, idx).indexOf(_today) >= 0;
+        };
+
         let found = false;
+        let foundToday = false;
         const t0 = Date.now();
         while (Date.now() - t0 < 8000) {
             try {
                 const html = document.body ? (document.body.innerHTML || '') : '';
-                if (asin && html.indexOf(asin) >= 0) { found = true; break; }
+                if (asin) {
+                    const idx = html.indexOf(asin);
+                    if (idx >= 0) {
+                        found = true;
+                        foundToday = _isTodaysOrder(html, idx);
+                        if (foundToday) break;        // 今日の注文として確定 → 即抜け
+                    }
+                }
             } catch (e) {}
             await sleep(500);
         }
         const waited = Date.now() - t0;
+        if (found && !foundToday) {
+            // ASIN はあるが今日の注文ではない = 過去の購入。今回は買えていない扱い。
+            try { logAm('warn', 'order-check',
+                '注文履歴に ASIN はあるが今日の注文ではない → 過去の購入と判断（今回は未購入）', {
+                asin: asin, today: _today }); } catch (e) {}
+            found = false;
+        }
         clearOrderCheck();
 
         if (found) {
@@ -15644,6 +15675,11 @@
                     } catch (e) {}
                 };
                 setTimeout(_ckWatch, _ckWaitMs);
+                // ★v1.14.0 弱点修正: 初回チェックがページ読込から _ckWaitMs(30秒)後だったため、
+                //   確定 click してから判定まで実測 28 秒かかっていた(2026-09-06 18:45:06→18:45:34)。
+                //   click 後は 15 秒で見に行けるよう、早い側のタイマーも張っておく。
+                //   _ckWatch 自身が「click から 15 秒未満なら張り直す」ので二重発火しない。
+                try { setTimeout(_ckWatch, 15500); } catch (e) {}
             }
         } catch (e) {}
 
