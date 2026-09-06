@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.8.0
+// @version      1.9.0
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.8.0';
+    const SCRIPT_VERSION = 'PC-1.9.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -14009,6 +14009,59 @@
         return true;
     };
 
+    // ★PC-1.9.0: 確定画面の描画待ち上限 (ms)。0 で無効=従来どおり即 click。
+    const CHECKOUT_RENDER_WAIT_MS = (function () {
+        try {
+            const v = parseInt(CONFIG.checkoutRenderWaitMs, 10);
+            if (Number.isFinite(v) && v >= 0) return v;
+        } catch (e) {}
+        return 2500;
+    })();
+
+    // ★PC-1.9.0: 確定画面が「本当に描画し終わっているか」を待つ (HIRO 2026-09-06)
+    //
+    //   全ログを突き合わせて判明した、PC 失敗と iOS 成功を分ける唯一の差:
+    //     確定 click 直前の verify 内容
+    //       PC  失敗 6/6 : total = null      / Amazon発送の表示 = 検出できず
+    //       iOS 成功 30+ : total = 770〜8800 / Amazon発送の表示 = ほぼ全て検出
+    //     フォーム(formId/formAction/hiddenInput/CSRF)は両者バイト単位で同一。
+    //     pipelineType も両者 turbo で同一。ボタン検出も両者 待機 0ms。
+    //   → PC は「ボタンは在るが、金額も配送表示もまだ描画されていない」状態で
+    //     click している。Amazon の React が hydrate し切る前に submit するため、
+    //     POST は飛ぶ(status 200 / text-html)が画面が /spc から進まない。
+    //
+    //   これまで failsafe が毎回 NG を出していたのは正しい警告だった。
+    //   それを VERIFIED_DIRECT で握り潰して click していたのが誤りだった。
+    //
+    //   対策: click 前に「金額が読める」まで待つ。上限つきなので最悪でも遅延するだけ。
+    //   ※ もし PC のデスクトップ DOM では構造的に金額が取れないだけなら、
+    //     上限まで待って従来どおり click する(振る舞いは変わらない)。
+    const waitCheckoutRendered = async (root, maxMs) => {
+        const limit = (typeof maxMs === 'number' && maxMs >= 0) ? maxMs : 2500;
+        const t0 = Date.now();
+        let total = null;
+        let shipper = false;
+        while (Date.now() - t0 < limit) {
+            try { total = extractCheckoutTotal(root); } catch (e) { total = null; }
+            try {
+                const txt = (root && root.body ? root.body.innerText : '') || '';
+                shipper = /Amazon\s*(が発送|から発送|発送)/.test(txt);
+            } catch (e) { shipper = false; }
+            if (total !== null && shipper) break;
+            if (isStopped()) break;
+            await sleep(100);
+        }
+        const waited = Date.now() - t0;
+        try {
+            logAm(total !== null ? 'info' : 'warn', 'checkout-render-wait',
+                total !== null
+                    ? '確定画面の描画を確認 → click へ'
+                    : '確定画面の金額が読めないまま上限に到達 → そのまま click',
+                { waitedMs: waited, total: total, hasShipper: shipper, limitMs: limit });
+        } catch (e) {}
+        return { total: total, shipper: shipper, waitedMs: waited };
+    };
+
     const handleCheckout = async (opts) => {
         if (isStopped()) return;
         // ★v0.3.8.43: skipInitialSleep オプション (HIRO 要望: 確定 click までの短縮)
@@ -14071,6 +14124,10 @@
         try {
             logAm('info', 'checkout', `SPC: 「注文を確定する」検出(待機 ${waitMs}ms)`);
         } catch (e) {}
+        // ★PC-1.9.0: ボタンが在っても画面が描画し切っていない事がある。
+        //   金額が読めるまで最大 2.5 秒だけ待ってから click する。
+        await waitCheckoutRendered(document, CHECKOUT_RENDER_WAIT_MS);
+        if (isStopped()) return;
         await performOrderConfirm(document, 'SPC 注文確認画面');
     };
 
