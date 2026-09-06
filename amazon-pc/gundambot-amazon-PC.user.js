@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.7.1
+// @version      1.8.0
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.7.1';
+    const SCRIPT_VERSION = 'PC-1.8.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -10418,6 +10418,26 @@
     //   対策: fetch/xhr hook で POST /spc/place-order を捕捉、Content-Type が HTML 以外なら
     //         place-order-non-html-response 警告ログを出す (原因特定+将来検知用)
     //   呼出: performOrderConfirm の click 投入直前で 10 秒間 hook 起動
+    // ★PC-1.8.0: place-order の応答本文を必ず記録し、成否のマーカーを判定する。
+    //   PC-1.7.0 で contentType が "" → "text/html" に変わり、空応答(=0バイトの
+    //   "spc" ファイルがダウンロードされる現象)は解消した。しかし画面は /spc に
+    //   留まったままで、応答本文が記録されていなかったため理由が分からなかった。
+    //   (旧コードは if (!isHtml) の時だけ本文を保存していた = 正常時は捨てていた)
+    const classifyPlaceOrderBody = (text) => {
+        const t = String(text || '');
+        const hit = (re) => re.test(t);
+        return {
+            len: t.length,
+            thankyou: hit(/\/gp\/buy\/thankyou|ご注文ありがとう|注文を承りました|ご注文の確定/),
+            stillSpc: hit(/place-order|注文を確定する|turbo-checkout-pyo-button/),
+            soldOut: hit(/在庫切れ|入手できなく|現在お取り扱いできません|品切れ/),
+            needAction: hit(/認証|確認コード|パスワード|サインイン|CAPTCHA|ロボット/),
+            errorPage: hit(/申し訳ありません|問題が発生|エラーが発生|ご迷惑をおかけ/),
+            addressIssue: hit(/お届け先|住所を選択|配送先/),
+            paymentIssue: hit(/お支払い方法|支払い方法を選択|クレジットカード/),
+        };
+    };
+
     const observePlaceOrderResponse = (durationMs) => {
         try {
             const startedAt = Date.now();
@@ -10452,13 +10472,18 @@
                                 contentType: ct, tMs: Date.now() - startedAt,
                             }); } catch (e) {}
                             // body 先頭を取得 (HTML 以外の時は中身も記録 - 将来の調査用)
-                            if (!isHtml && res) {
+                            // ★PC-1.8.0: HTML でも必ず本文を記録する(旧: 非HTMLのみ)
+                            if (res) {
                                 res.clone().text().then(function(text) {
-                                    try { logAm('info', 'place-order-response-body',
-                                        '📋 place-order 副次 XHR レスポンスボディ先頭 (参考情報)', {
-                                        bodyHead: String(text || '').slice(0, 2000),
-                                        contentType: ct,
-                                    }); } catch (e) {}
+                                    try {
+                                        const c = classifyPlaceOrderBody(text);
+                                        logAm(c.thankyou ? 'info' : 'warn', 'place-order-response-body',
+                                            (c.thankyou ? '✅ 応答本文に注文完了マーカーあり'
+                                                        : '🔎 応答本文(注文完了マーカーなし)'), {
+                                            contentType: ct, verdict: c,
+                                            bodyHead: String(text || '').slice(0, 2000),
+                                        });
+                                    } catch (e) {}
                                 }).catch(function() {});
                             }
                         }
@@ -10496,14 +10521,19 @@
                                 status: self.status,
                                 contentType: ct, tMs: Date.now() - startedAt,
                             }); } catch (e) {}
-                            if (!isHtml) {
+                            // ★PC-1.8.0: HTML でも必ず本文を記録する(旧: 非HTMLのみ)
+                            //   実ログ 2026-09-06 17:36 で contentType=text/html になったが
+                            //   本文が残らず、画面が /spc に留まる理由を追えなかった。
+                            {
                                 try {
                                     let respText = '';
                                     try { respText = self.responseText || ''; } catch (e2) {}
-                                    logAm('info', 'place-order-response-body',
-                                        '📋 place-order 副次 XHR レスポンスボディ先頭 [xhr] (参考情報)', {
+                                    const c = classifyPlaceOrderBody(respText);
+                                    logAm(c.thankyou ? 'info' : 'warn', 'place-order-response-body',
+                                        (c.thankyou ? '✅ 応答本文に注文完了マーカーあり [xhr]'
+                                                    : '🔎 応答本文(注文完了マーカーなし) [xhr]'), {
+                                        contentType: ct, verdict: c,
                                         bodyHead: String(respText).slice(0, 2000),
-                                        contentType: ct,
                                     });
                                 } catch (e) {}
                             }
