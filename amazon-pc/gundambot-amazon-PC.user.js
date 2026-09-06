@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.10.0
+// @version      1.10.1
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.10.0';
+    const SCRIPT_VERSION = 'PC-1.10.1';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -3366,6 +3366,13 @@
         return new RegExp('[?&]m=' + AMAZON_SELLER_ID + '\\b').test(location.search || '');
     };
 
+    // ★PC-1.10.1: iOS v0.4.3.0 の「?m= 切替の検証＋再試行」を PC に移植。
+    //   旧 PC 版は setTimeout で location.href を投げっぱなしで、
+    //   不発しても誰も気づかず無音で止まっていた。
+    //   実ログ 2026-09-06 18:16:53.897 「?m= 切替リダイレクト」の後、
+    //   26 秒間ログが一行も無い（ページが遷移していない）。
+    //   PC-1.10.0 で案A（?m= スキップ）を戻した結果、
+    //   この無防備な経路に再び戴された。iOS と同じ防御を入れる。
     const forceAmazonDirectUrl = () => {
         if (isUrlForcedAmazon()) return false; // 既に直販強制 URL
         if (S.shouldHalt()) return false;
@@ -3391,10 +3398,74 @@
         } catch (e) {}
 
         toast(`▶ Amazon.co.jp 直販URLに切替中…\n(?m=${AMAZON_SELLER_ID.slice(0,6)}…)`, '#1976d2', 3000);
-        setTimeout(() => {
+
+        // ★v0.4.3.0: ナビゲーション検証 + 自動再試行 (HIRO 2026-09-03「固まった」報告)
+        //
+        //   旧コードの致命的な穴:
+        //     setTimeout(200) → location.href = newUrl → return で投げっぱなし。
+        //     ナビゲーションが起きなかった場合、検証もリトライもログも一切無く
+        //     ツールは無言で死ぬ。呼び出し元 (startPurchaseTransAm / startPurchase) は
+        //     forceAmazonDirectUrl() の直後に return するため、他に動くものが無い。
+        //
+        //   実ログの証拠 (2026-09-03 朝):
+        //     07:36:05.250 perf= 6701  ?m= 切替リダイレクト
+        //     07:36:28.052 perf=29503  (同一ページのまま 23 秒経過)
+        //     07:37:02.440 perf=63891  (同一ページのまま 57 秒経過)
+        //     perfNow() はページロードごとに 0 に戻るので、値が増え続ける
+        //     = ページが一度もリロードしていない = navigate が起きていない。
+        //     HIRO はその間ボタンを 3 回押し直していた ← 体感「固まった」の正体。
+        //
+        //   対策: 撃った後に必ず結果を検証する。
+        //     - 停止で中止した場合もログに残す (旧: 完全に無言)
+        //     - 1.5 秒後に URL が変わっていなければ location.replace → reload と手を変えて再試行
+        //     - 3 回とも不発なら理由を残して停止
+        //   ナビゲーション成功時はページが破棄されタイマーごと消えるため、
+        //   正常系にはこのコードは一切影響しない。
+        const NAV_VERIFY_MS = 1500;
+        const beforeHref = location.href;
+        let navTry = 0;
+
+        const verifyNav = () => {
+            if (location.href !== beforeHref) return;   // 遷移済み = 成功
             if (S.shouldHalt()) return;
-            location.href = newUrl;
-        }, 200);
+            if (navTry >= 3) {
+                try { logAm('error', 'force-amazon-url',
+                    '?m= 切替が 3 回とも不発 → 停止 (商品ページを開き直してください)', {
+                    href: location.href.slice(0, 160), toUrl: newUrl.slice(0, 160),
+                }); } catch (e) {}
+                toast('⚠️ URL 切替に失敗しました\n商品ページを開き直してください', STOP_RED, 10000);
+                try { S.opFullStop(); } catch (e) {}
+                return;
+            }
+            try { logAm('warn', 'force-amazon-url',
+                '?m= 切替が不発 (URL 変化なし) → 再試行', {
+                navTry: navTry, waitedMs: NAV_VERIFY_MS,
+                nextMethod: navTry === 1 ? 'location.replace' : 'location.reload',
+            }); } catch (e) {}
+            fireNav();
+        };
+
+        function fireNav() {
+            if (S.shouldHalt()) {
+                try { logAm('warn', 'force-amazon-url',
+                    '?m= 切替を中止 (停止状態) ← 旧版はここで無言で死んでいた', {
+                    mode: S.getMode(), navTry: navTry,
+                }); } catch (e) {}
+                return;
+            }
+            navTry++;
+            try {
+                if (navTry === 1)      location.href = newUrl;
+                else if (navTry === 2) location.replace(newUrl);
+                else                   location.reload();
+            } catch (e) {
+                try { logAm('error', 'force-amazon-url', '?m= 切替 navigate が例外', {
+                    navTry: navTry, error: String(e) }); } catch (e2) {}
+            }
+            setTimeout(verifyNav, NAV_VERIFY_MS);
+        }
+
+        setTimeout(fireNav, 200);
         return true;
     };
 
