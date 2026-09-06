@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.4.5.1
+// @version      0.4.6.0
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3297,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.4.5.1';
+    const SCRIPT_VERSION = '0.4.6.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -13177,6 +13177,11 @@
             /ご請求額[\s:：]+[¥￥]\s*([\d,]+)/,
             /合計[\s:：]+[¥￥]\s*([\d,]+)/,
             /注文合計[\s:：]+[¥￥]\s*([\d,]+)/,
+            // ★v1.11.0: PC の確定画面は「￥3,080 合計は税込みです」という
+            //   金額が先に来る表記。旧パターン（「合計: ￥N」）では取れず
+            //   total が常に null になっていた。実文言を追加する。
+            /[¥￥]\s*([\d,]+)\s*合計/,
+            /(?:^|\n)\s*[¥￥]\s*([\d,]+)\s*(?:\n|$)/,
         ];
         for (const p of patterns) {
             const m = txt.match(p);
@@ -13206,8 +13211,15 @@
         const issues = [];
         const checks = { hasAmazonShipper:false, hasAmazonSeller:false, singleItem:true, withinMaxPrice:true, noNonAmazonSeller:true };
 
+        // ★v1.11.0: 実ログ(2026-09-06 18:22:15 の checkout-page-dump)で判明。
+        //   PC の確定画面は「発送元Amazon Japan G.K.および販売元Amazon.co.jp」と表記する。
+        //   旧パターンは「Amazon Japan G.K.から発送」「出荷元Amazon」しか見ておらず、
+        //   そのため PC では hasAmazonShipper が常に false になり、
+        //   failsafe が毎回 NG → VERIFIED_DIRECT で迂回され、
+        //   実質的に安全確認が無効化されていた。実文言を追加する。
         if (/Amazon Japan G\.K\.から発送/.test(txt) ||
             /Amazonによる発送/.test(txt) ||
+            /発送元\s*Amazon(?:\s*Japan)?/.test(txt) ||
             /出荷元[\s:：]*Amazon(?:\.co\.jp)?(?:\s|$|\n)/.test(txt)) {
             checks.hasAmazonShipper = true;
         } else { issues.push('Amazon発送の表示なし'); }
