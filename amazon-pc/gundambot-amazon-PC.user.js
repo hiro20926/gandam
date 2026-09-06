@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入 [PC版]
 // @namespace    gundam-bot.amazon.pc
-// @version      1.6.0
+// @version      1.7.0
 // @description  Amazon.co.jp 直販オンリーの自動購入【PC版 / Chrome + Tampermonkey】複数商品の巡回購入対応。iOS v0.3.9.0 ベース
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3306,7 +3306,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = 'PC-1.6.0';
+    const SCRIPT_VERSION = 'PC-1.7.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -9399,6 +9399,45 @@
         } catch (e) {}
         return items;
     };
+    // ★PC-1.7.0 (HIRO 報告 2026-09-06「確定ボタンが出たまま止まる」の根治)
+    //
+    //   ログ全件から判明した根本原因:
+    //     buildBuynowUrlFromAsinAndOffer が組み立てている URL に含まれる
+    //       devicestring-override=Browser-SmartPhone
+    //       weblab=RCX_CHECKOUT_TURBO_MWEB_126825   (MWEB = モバイル Web)
+    //       ref_=dp_mw_buy_now_...                  (mw = モバイル Web)
+    //     これらは **iOS の通信から採取したモバイル専用パラメータ** で、
+    //     PC 版は同じ文字列をそのままコピーして持っていた。
+    //
+    //   Amazon 自身が発行した buynow URL の観測数(全ログ):
+    //     iOS : devicestring-override 25 件 / weblab 17 件
+    //     PC  : **0 件**  ← Amazon は PC でこの URL を一度も出していない
+    //   PC 版に UA 偽装は無いため、デスクトップ Chrome から
+    //   モバイル専用の決済パイプラインを叩いている状態だった。
+    //
+    //   実測の裏付け:
+    //     iOS 確定 click → /thankyou/ 到達  204 件成功
+    //     PC  確定 click → /spc に留まり     成功 0 件
+    //     (PC の「注文完了」3 件は PC-1.2.8 で削除済みの誤判定ロジックによるもの)
+    //     PC の place-order POST は毎回 status 200 / contentType 空 / body 空 を返し、
+    //     ブラウザがそれを 0 バイトの "spc" ファイルとしてダウンロードしていた
+    //     (HIRO 提供の spc(1)〜spc(22) がその実体)。
+    //
+    //   true  = 従来どおりモバイル用パラメータを付ける(iOS と同じ URL)
+    //   false = PC 用。モバイル専用パラメータを外して Amazon にデスクトップ側の
+    //           パイプラインを選ばせる。PC 版の既定はこちら。
+    //   ※ この URL は在庫判定(oos 判定)にも使われるため、挙動が変わったら
+    //     このフラグを true に戻せば従来の動作に戻せる。
+    const MOBILE_TURBO_PARAMS = (function () {
+        try {
+            if (typeof CONFIG !== 'undefined' && CONFIG &&
+                typeof CONFIG.mobileTurboParams === 'boolean') {
+                return CONFIG.mobileTurboParams;
+            }
+        } catch (e) {}
+        return false;   // PC 既定: モバイル専用パラメータを付けない
+    })();
+
 
     const buildBuynowUrlFromAsinAndOffer = (asin, offerId, addressID) => {
         if (!asin || !offerId) return '';
@@ -9410,12 +9449,16 @@
         // ★v0.3.8.41: m=AN1VRQENFRJN5 (Amazon 直販強制) を追加
         //   → マケプレオファーへの自動切替を防ぐ (HIRO 指摘: 直販に切り替えずに動いていた)
         return 'https://www.amazon.co.jp/checkout/entry/buynow?'
-            + 'ref_=dp_mw_buy_now_chw_buyNow_2-1'
+            + (MOBILE_TURBO_PARAMS
+                ? 'ref_=dp_mw_buy_now_chw_buyNow_2-1'
+                : 'ref_=dp_start-bbf_1_glance_buyNow_2-1')
             + '&referrer=detail'
             + '&pipelineType=turbo'
             + '&clientId=retailwebsite'
-            + '&devicestring-override=Browser-SmartPhone'
-            + '&weblab=RCX_CHECKOUT_TURBO_MWEB_126825'
+            + (MOBILE_TURBO_PARAMS
+                ? '&devicestring-override=Browser-SmartPhone'
+                  + '&weblab=RCX_CHECKOUT_TURBO_MWEB_126825'
+                : '')
             + '&primeStatus=true'
             + '&temporaryAddToCart=1'
             + '&asin.1=' + encodeURIComponent(asin)
@@ -9959,12 +10002,16 @@
         // ★v0.3.8.36: quantity.1=1 を追加
         // ★v0.3.8.41: merchantID=AN1VRQENFRJN5 (Amazon 直販強制) を追加
         return 'https://www.amazon.co.jp/checkout/entry/buynow?'
-            + 'ref_=dp_mw_buy_now_chw_buyNow_2-1'
+            + (MOBILE_TURBO_PARAMS
+                ? 'ref_=dp_mw_buy_now_chw_buyNow_2-1'
+                : 'ref_=dp_start-bbf_1_glance_buyNow_2-1')
             + '&referrer=detail'
             + '&pipelineType=turbo'
             + '&clientId=retailwebsite'
-            + '&devicestring-override=Browser-SmartPhone'
-            + '&weblab=RCX_CHECKOUT_TURBO_MWEB_126825'
+            + (MOBILE_TURBO_PARAMS
+                ? '&devicestring-override=Browser-SmartPhone'
+                  + '&weblab=RCX_CHECKOUT_TURBO_MWEB_126825'
+                : '')
             + '&primeStatus=true'
             + '&temporaryAddToCart=1'
             + '&asin.1=' + encodeURIComponent(asin)
