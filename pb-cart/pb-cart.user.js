@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.53 2026-10-28 20:32 #f0780d JST
+// @version      v2.3.55 2026-10-29 01:18 #060a66 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -467,6 +467,23 @@
     ]);
   }
 
+  // ★v2.3.54 (2026-10-29 実機検証で確定): ツール自身のダイアログ用に本物の alert/confirm を退避。
+  //   Phase31 の横取り(window.alert/confirm 上書き)は本来「サイトの」ネイティブダイアログ(押下時フリーズの元)用だが、
+  //   ツール自身の確認まで巻き込み、 confirm が常に OK 扱い → 設定の「この商品を削除」「🗑全設定削除」等が
+  //   無確認で即実行されていた(✕1タップで商品1→0件を実証)。 登録完了などのお知らせも表示されていなかった。
+  //   → ツール自身の UI(全てボタン操作起点・監視ループ中には出ない)は toolAlert/toolConfirm で本物を出す。
+  //   読込時(=横取り設置より前)に退避。 二重注入時は最初の退避値を使う。
+  try {
+    if (!window._pbNativeAlert) window._pbNativeAlert = window.alert;
+    if (!window._pbNativeConfirm) window._pbNativeConfirm = window.confirm;
+  } catch (_) {}
+  function toolAlert(msg) {
+    try { const f = window._pbNativeAlert; return f ? f.call(window, msg) : undefined; } catch (_) { return undefined; }
+  }
+  function toolConfirm(msg) {
+    try { const f = window._pbNativeConfirm; return f ? !!f.call(window, msg) : false; } catch (_) { return false; }
+  }
+
   // 設定モーダル開いてる間はリロード/遷移を止める(編集途中で消えないように)
   function isSettingsModalOpen() {
     const m = document.getElementById('pb-modal');
@@ -565,6 +582,10 @@
     // ★Phase 13 (2026-06-05): reload() 呼び出し時刻を記録 → 次 boot で「reload()→boot」 を計測
     //   sinceNav (ナビ開始→boot=Akamaiページロード) と引き算すれば「ツール側 overhead」 が分離できる
     try { localStorage.setItem('pb_cart_v2_reload_marker', JSON.stringify({ t: Date.now(), label: label || '' })); } catch (_) {}
+    // ★v2.3.54 (2026-10-29 実機検証で発見): reload() を呼んだ旧ページでは監視を再開させない(mainLoop 冒頭で判定)。
+    //   reload()→新ページ切替の 0.3〜0.8秒の間に、 FAB自己修復の再起動等で旧ページの mainLoop が再実行され
+    //   2回目の reload() を出していた(=0.5秒以内に2リクエスト。 ⚡ON で顕在化)。
+    try { window._pbNavigatingAt = Date.now(); } catch (_) {}
     location.reload();
   }
   async function safeNavigate(url, label) {
@@ -572,6 +593,7 @@
     // 別URLへの遷移はリロードと違いセーフガードの対象外なので履歴クリア
     try { localStorage.removeItem(SAFARI_RELOAD_HISTORY_KEY); } catch (e) {}
     try { flushLogBuffer(); } catch (e) {}
+    try { window._pbNavigatingAt = Date.now(); } catch (_) {}   // ★v2.3.54 遷移中の旧ページで監視を再開しない
     location.href = url;
   }
   const $ = (sel, ctx) => (ctx || document).querySelector(sel);
@@ -1127,11 +1149,16 @@
   function defaultConfig() {
     return {
       version: 2,
+      _mig_v2354: true,   // ★v2.3.54 移行済みフラグ(新規インストールは最初から移行済み扱い)
       products: [],
       options: {
         post_success_action: 'stop', // 'stop' | 'safe' | 'normal'
-        auto_nuke_when_empty: true,
-        periodic_cleanup_enabled: true,    // 定期キャッシュクリア(アクセス制限予防)
+        // ★v2.3.54 (2026-10-29 HIROさん承認): 自動全消し・10分毎Cookie削除を既定OFF(⚙設定のチェックで再ON可)。
+        //   実機確認: p-bandai のボットマネージャーCookie(_TSTD/_TSKD/BM-session-id/RT)はJSから見えて削除される。
+        //   10分毎削除は発売前待機(同ページに居座る)中に発動し、 ドロップ直前にセッションを消す恐れ
+        //   (6月に Cookie削除直後 /error/4/ 連発→強制ログアウトを観測)。 BANはIP由来で Cookie 削除では解けない。
+        auto_nuke_when_empty: false,
+        periodic_cleanup_enabled: false,   // 定期キャッシュクリア(旧:アクセス制限予防。 実効なし・害ありのため既定OFF)
         periodic_cleanup_minutes: 10,      // 何分ごと
         low_power_mode: false,             // ★古いiPhone(13Pro/11Pro等)向け低負荷モード
         lightweight_polling: false,        // ★Phase 25 (2026-06-11): SPA化で軽量ポーリングは死亡(fetchが空シェルを返し #buy が取れず常に refresh-failed リロードに落ちる)。実リロード+描画待ち監視に一本化。loadConfig で常に false に強制(下記参照)。
@@ -1148,6 +1175,13 @@
         //   2500ms だと遅い端で空タイムアウト→リロードを繰り返す恐れがあるため余裕を持たせる。
         //   実際の充填時間は phase14 ログ(待ちNms)に残るので、 運用データで再調整可能。
         wait_order_fill_max_ms: 4000,      // order 充填待ちの上限。 超えたら POST せずリロード
+        // ★v2.3.54 (2026-10-29 実機計測で確定): 本物ボタン押下の直前にも order 充填を待つ(8ms刻み)。
+        //   #buy は出現直後 0〜80ms 注文番号が空 → その間に押すとサイト内部で即「注文できる商品がございません」
+        //   (3ms・通信なし)で弾かれ、 人間ペース後の2発目でやっと入っていた(実測2.4秒ロス)。
+        //   充填の瞬間に押せば1発目で通る(実測: 出現+35msで充填→即押下→470msで追加)。
+        //   false=旧動作(出現直後に即押下)。 上限を超えても入らなければ従来どおり押す。
+        wait_order_fill_realbtn: true,
+        wait_order_fill_realbtn_max_ms: 1500,
         // ★Phase 26 (2026-06-24): 1発目を撃つ前に「青が settle して持続しているか」を確認(6/11反応駆動を1発目に適用)。
         //   SPA描画直後の transient「カートに入れる」を掴んで押すと、非オーダー品の押下でサイトが35〜90秒
         //   フリーズする(本日実機確定)。 settle窓の間に grey 化したら transient と確定して撃たない。
@@ -1236,7 +1270,7 @@
       if (!raw) return defaultConfig();
       const c = JSON.parse(raw);
       const def = defaultConfig();
-      return {
+      const merged = {
         ...def, ...c,
         // ★Phase 25 (2026-06-11): 軽量ポーリングは SPA化で死亡 → 保存済みで true でも常に false に強制。
         //   監視は「実リロード+描画待ち(Phase 19)」に一本化。無駄fetch/refresh-failed churn を排除。
@@ -1253,6 +1287,16 @@
         notify: { ...def.notify, ...(c.notify || {}) },
         products: Array.isArray(c.products) ? c.products : [],
       };
+      // ★v2.3.54 1回限りの移行(HIROさん承認): 保存済み設定の「10分毎Cookie削除」「自動全消し」を OFF にする。
+      //   既定を変えるだけでは保存値(多くは true)が上書きして効かないため。 移行後に ⚙設定 で ON に戻せば以後はそれを尊重。
+      if (c._mig_v2354 !== true) {
+        merged.options.periodic_cleanup_enabled = false;
+        merged.options.auto_nuke_when_empty = false;
+        merged._mig_v2354 = true;
+        try { localStorage.setItem(CONFIG_KEY, JSON.stringify(merged)); } catch (_) {}
+        try { pbLog('🔧','config','v2.3.54 移行: 10分毎Cookie削除・自動全消し を OFF(⚙設定で再ON可)'); } catch (_) {}
+      }
+      return merged;
     } catch (e) { return defaultConfig(); }
   }
   function saveConfig(c) {
@@ -1695,8 +1739,9 @@
   //   order はページ読込後に JS が遅れて埋める (perf 2-4s)。 これを待ってから撃てば 1発目が有効。
   //   戻り値: { ok:true, orderId } 充填済 / { ok:false, reason } タイムアウト等
   //   maxMs 上限まで 50ms 間隔でポーリング。 paused / grey 化 / 設定モーダルで即離脱。
-  async function waitForCartOrderFilled(maxMs) {
+  async function waitForCartOrderFilled(maxMs, pollMs) {
     const limit = maxMs || 4000;
+    const _poll = pollMs || 50;   // ★v2.3.54: 本物ボタン前は 8ms 刻み(充填は出現後0〜80ms)。 既存呼出は 50ms のまま
     const t0 = Date.now();
     let polls = 0;
     while (Date.now() - t0 < limit) {
@@ -1713,7 +1758,7 @@
         return { ok: true, orderId: v, waitedMs: Date.now() - t0, polls };
       }
       polls++;
-      await sleep(50);
+      await sleep(_poll);
     }
     return { ok: false, reason: 'timeout', waitedMs: Date.now() - t0, polls };
   }
@@ -2204,7 +2249,7 @@
   //     - waitCapMs(既定90秒)完全沈黙 = ページが死んでいる と判断 → DEAD_PAGE 返却(呼び元でリロード救出)
   //   戻り値は attemptCartAddOnce 互換: { result, newOrderIds?, afterIds, timings, detail }
   async function realButtonAttemptOnce(target, knownCartIds, waitCapMs) {
-    const t0 = Date.now();
+    let t0 = Date.now();
     const beforeIds = knownCartIds || [];
     const cap = waitCapMs || 90000;
     // エラー/売り切れ系文言。 ★Phase 21b (2026-06-11): 実発売で「注文できる商品がございません」 が出て
@@ -2213,10 +2258,38 @@
     //   この小窓はカート未投入でも出る曖昧文言で、 成功誤判定の主因だった(6/25 HIROさん緊急指摘)。
     //   ERR_RE 扱い = 小窓を閉じて連打継続。 真にカート入りなら buttonState の ALREADY_IN_CART/LIMIT で検知される。
     const ERR_RE = /大変混み合っているため|在庫がございません|追加できません|エラーが発生|注文できる商品がございません|販売(を|が)?終了|受付(を|が)?終了|完売|商品数変更が出来ない|個数に不足/;
-    const btn = document.getElementById('buy') || document.getElementById('buy_side');
+    let btn = document.getElementById('buy') || document.getElementById('buy_side');
     const _mk = (result, extra) => Object.assign({ result, afterIds: beforeIds,
       timings: { post: Date.now()-t0, body:0, decode:0, cartFetch:0, total: Date.now()-t0 } }, extra || {});
     if (!btn) return _mk('UNCONFIRMED', { detail: 'realbtn-no-button' });
+    // ★v2.3.54 (2026-10-29 実機計測で確定): 押す直前に「注文番号(input[name=order])が入った瞬間」を待つ。
+    //   #buy は見た目「予約する/有効」でも出現後0〜80msは注文番号が空。 その間の押下はサイト内部で即
+    //   「注文できる商品がございません」(3ms・通信なし)で弾かれ、 人間ペース後の2発目で入っていた(実測2.4秒ロス)。
+    //   充填の瞬間に押せば1発目で通る(実測 出現+35ms→押下→470msで追加)。 既に入っていれば待ち0ms。
+    //   ロールバック: options.wait_order_fill_realbtn=false
+    if ((loadConfig().options || {}).wait_order_fill_realbtn !== false) {
+      const _wfMax = (loadConfig().options || {}).wait_order_fill_realbtn_max_ms || 1500;
+      let _wf = await waitForCartOrderFilled(_wfMax, 8);
+      if (!_wf.ok && _wf.reason === 'modal') {
+        await waitWhileSettingsOpen('realbtn-order-fill');   // 設定中は閉じるまで待ってから続行(ループは抜けない)
+        _wf = await waitForCartOrderFilled(_wfMax, 8);
+      }
+      if (_wf.ok) {
+        if (_wf.waitedMs > 0) pbLog('🎯','order-fill',`注文番号の充填を確認(待ち${_wf.waitedMs}ms) → 押下`);
+      } else if (_wf.reason === 'paused') {
+        return _mk('PAUSED', { detail: 'realbtn-paused' });
+      } else if (String(_wf.reason).indexOf('grey') === 0 && !/ALREADY_IN_CART|LIMIT/.test(String(_wf.reason))) {
+        // 待つ間に灰色化(在庫切れ等)。 押さない(非オーダー品の押下はレンダラーフリーズの元)
+        // ※ALREADY_IN_CART/LIMIT(=もうカートに入っている)は下の従来経路へ: 押下後の待ちで buttonState が
+        //   'added' と判定する成功検知経路を残すため(引継書「SUCCESS 検知経路を消さない」)。
+        pbLog('🎯','order-fill',`注文番号待ちの間に灰色化(${_wf.reason}) → 押さない`);
+        return _mk('UNCONFIRMED', { detail: 'realbtn-grey-before-press' });
+      } else {
+        pbLog('⚠','order-fill',`注文番号の充填待ち離脱(${_wf.reason}${_wf.waitedMs != null ? ' ' + _wf.waitedMs + 'ms' : ''}) → 従来どおり押下`);
+      }
+      btn = document.getElementById('buy') || document.getElementById('buy_side') || btn;   // 待つ間のDOM差し替えに追従
+      t0 = Date.now();   // 小窓待ちの計測は実押下から
+    }
     // 本物ボタンを実クリック(サイト本来の add-to-cart JS を発火させる)
     // ★2026-07-09 (空打ち偽成功 防止): 押下直前に _pbLastAlert をクリア → detectCartAddedPopup / ERR判定が
     //   「この押下の応答」だけを見る。 押下前の古いalert(ツールの登録通知等)を成功/失敗と誤認しない。
@@ -2399,8 +2472,13 @@
   //         人間は _abck を保持し続けるので、 温存する方が「継続中の人間セッション」 として速く通る。
   //   対象: Akamai BotManager 標準 Cookie 群 (前方一致)。 PB のカート/セッション Cookie は従来通り削除。
   const AKAMAI_COOKIE_PREFIXES = ['_abck', 'bm_sz', 'ak_bmsc', 'bm_sv', 'bm_mi', 'bm_s', '_cf_bm', 'ak_bmsc'];
+  // ★v2.3.54 (2026-10-29 実機確認): p-bandai で実際にJSから見えるボットマネージャーのセッション追跡Cookie。
+  //   上の標準名(_abck/bm_sz…)は p-bandai に存在せず温存0件だった(6/5「HttpOnlyで不可視」は名前不一致の誤読)。
+  //   → 🍪クリア/定期削除がボット管理Cookieを消していた(6月: 削除直後 /error/4/ 連発→強制ログアウト)。 完全一致で温存。
+  const PBANDAI_BOT_COOKIES = ['_tstd', '_tskd', 'bm-session-id', 'rt'];
   function _isAkamaiCookie(name) {
     const n = (name || '').toLowerCase();
+    if (PBANDAI_BOT_COOKIES.includes(n)) return true;
     return AKAMAI_COOKIE_PREFIXES.some(p => n === p || n.startsWith(p));
   }
   //   includeAkamai=true の時だけ Akamai Cookie も削除 (nukeAllSiteData の緊急リセット用)
@@ -2591,6 +2669,9 @@
     document.addEventListener('visibilitychange', window._pbMainLoopVisHandler);
   }
   async function mainLoop() {
+    // ★v2.3.54: reload()/遷移を呼んだ後の旧ページでは監視しない(二重リロード防止)。 5秒経っても
+    //   ページが切り替わらない異常時は解除(監視が止まりっぱなしにならないよう)。
+    try { if (window._pbNavigatingAt && Date.now() - window._pbNavigatingAt < 5000) return; } catch (_) {}
     if (_mainLoopRunning) {
       _mainLoopRequested = true;
       return;
@@ -2788,7 +2869,17 @@
                     : `${_rWaitCap}ms 待っても #buy 未描画 → そのまま判定へ(白いシェル/無ボタンページ)`);
       }
       let bsEarly = buttonState();
-      if (!bsEarly.clickable) {
+      // ★v2.3.54 (2026-10-29 実機計測): ⚡高速ON時、 在庫データで売切れ確定(×/全て在庫無し)なら
+      //   「青になるかの 0.5秒待ち」を飛ばす(⚡ONでも残っていた隠れ待ち)。 通常モードは従来どおり待つ。
+      let _skipBluePoll = false;
+      try {
+        const _o = (cfg.options || {});
+        if (!bsEarly.clickable && _o.fast_reload_mode === true && _o.data_stock_judge !== false) {
+          const _sjE = stockJudge();
+          if (_sjE.ready && _sjE.soldOut) _skipBluePoll = true;
+        }
+      } catch (_) {}
+      if (!bsEarly.clickable && !_skipBluePoll) {
         for (let i = 0; i < 10; i++) {
           await sleep(50);
           if (loadState().paused === true) { updateUI(); return; }
@@ -2923,7 +3014,9 @@
           // 【旧方式】実リロード
           updateUI({ status: `🔘 ${reasonLabel} → リロード #${at.reloads}` });
           pbLog('🔄','reload',`#${at.reloads} reason=${bsEarly.reason}`);
-          await humanSleep(timing().grey_reload_sleep_ms);
+          // ★v2.3.54: ⚡高速ON時はこの追加スリープ(200ms±50%、5%で+1〜3秒)を飛ばし、 待ちを safeReload の
+          //   揺らぎ(0.1〜0.3秒)に一本化。 通常モードは従来どおり(人間ペース待機に吸収される)。
+          if ((cfg.options || {}).fast_reload_mode !== true) await humanSleep(timing().grey_reload_sleep_ms);
           await safeReload('grey-reload-legacy');
           return;
         }
@@ -3016,7 +3109,9 @@
     }
     // ★boot から この時点までの経過時間(白画面前後の挙動診断用)
     const _sinceBootMs = (typeof window !== 'undefined' && window._pbBootAt) ? (Date.now() - window._pbBootAt) : null;
-    pbLog('🛒','main',`青ボタン検知 → 連打開始 (safe=${useSafeMode} cart=${knownCartIds.length}件${_sinceBootMs!=null?` boot後${_sinceBootMs}ms`:''})`);
+    // ★v2.3.54: 在庫データ判定ON時はこの後の在庫判定で押すか決まる(一瞬の偽の青なら押さない)ため、
+    //   「連打開始」と書かない(売切れ品で「連打開始」と出てログ解析を誤らせていた)。
+    pbLog('🛒','main',`青ボタン検知 → ${(cfg.options || {}).data_stock_judge !== false ? '在庫データで確認' : '連打開始'} (safe=${useSafeMode} cart=${knownCartIds.length}件${_sinceBootMs!=null?` boot後${_sinceBootMs}ms`:''})`);
     // ★HIROさん 2026-05-09 観察: 連打フロー直前の再判定で OK 窓を取り逃すバグを修正
     //   旧: ここで buttonState() 再判定 → grey ならリロード
     //       cart fetch 等で時間消費する間に JS が書き換える → 直前再判定で grey →
@@ -4465,7 +4560,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.53 2026-10-28 20:32 #f0780d JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.55 2026-10-29 01:18 #060a66 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -4498,7 +4593,7 @@
     // 📌 このページを商品に登録
     fab.querySelector('.btn-register-here').onclick = async () => {
       if (!isProductPage()) {
-        alert('商品ページではありません(/item/item-XXXXXXXXXX/ で実行してください)');
+        toolAlert('商品ページではありません(/item/item-XXXXXXXXXX/ で実行してください)');
         return;
       }
       const url = currentProductUrl();
@@ -4506,7 +4601,7 @@
       // 既登録チェック
       const exists = cfg.products.find((p) => normalizeProductUrl(p.url) === url);
       if (exists) {
-        if (!confirm('この商品は既に登録されています:\n' + (exists.name || exists.id) + '\n\n商品名・時刻を上書き取得しますか?')) return;
+        if (!toolConfirm('この商品は既に登録されています:\n' + (exists.name || exists.id) + '\n\n商品名・時刻を上書き取得しますか?')) return;
       }
       // 同origin fetch でメタ取得(現在のページ自体を fetch することで charset 等も正しく解決)
       pbLog('📌','register','fetch ' + url);
@@ -4541,7 +4636,7 @@
         _releaseLabel = 'タイマー未設定(再販品 or 自動取得不可、 設定モーダルで手動入力可)';
       }
       pbLog('✅','register',`saved name=${target.name || '(?)'} release=${_releaseLabel}`);
-      alert(
+      toolAlert(
         '✅ 商品を登録しました\n\n' +
         '名前: ' + (target.name || '(取得失敗 → 設定で手動編集)') + '\n' +
         '時刻: ' + (target.release_time ? new Date(target.release_time).toLocaleString('ja-JP') : '(なし=即時)') + '\n' +
@@ -4549,11 +4644,17 @@
         '右下「⚙ 設定」で詳細を編集できます。'
       );
       updateUI();
+      // ★v2.3.54 (2026-10-29 実機検証で確定): 登録しても監視ループが始まらず、 FABは「監視中」なのに無動作 →
+      //   ウォッチドッグ(30秒heartbeatなし→強制リロード)で初めて動いていた。 登録直後に監視を開始する
+      //   (mainLoop は多重起動ガード付き・停止中は動かない)。
+      try { if (loadState().paused !== true) { pbLog('▶','register','登録完了 → 監視を開始'); setTimeout(mainLoop, 0); } } catch (_) {}
     };
     // ⏸ 停止 / ▶ 再開
     fab.querySelector('.btn-pause').onclick = () => {
       const s = loadState();
       s.paused = !s.paused;
+      // ★v2.3.54: 手動操作の理由を記録(saveState 経由だと auto-pause/auto-resume と誤表記されていた)
+      setTabPaused(s.paused, s.paused ? 'manual-pause' : 'manual-resume');
       saveState(s);
       pbLog(s.paused === true ? '⏸' : '▶', 'pause', s.paused === true ? '停止' : '再開');
       updateUI();
@@ -4635,6 +4736,15 @@
       if (!document.body) return;
       const _fab = document.getElementById('pb-fab');
       if (_fab) {
+        // ★v2.3.54 (2026-10-29 実機検証で確定): 設定画面を開いている間は FAB を隠す。
+        //   旧: 下の最前面復帰がツール自身の設定画面を「サイトのモーダル」と誤認 → FAB(停止/🍪クリア等)が
+        //   設定内容の上に重なり誤タップの恐れ + 設定中=一時停止なのに FAB は「監視中」表示で矛盾していた。
+        //   閉じ方(✕/保存/その他)に関わらずここ(700ms毎)で確実に再表示される。
+        if (isSettingsModalOpen()) {
+          if (_fab.style.display !== 'none') _fab.style.display = 'none';
+          return;
+        }
+        if (_fab.style.display === 'none') _fab.style.display = '';
         // ★Phase 25 (2026-06-11): FAB は健在だが、サイト側モーダル(「注文できる商品がございません」等)に
         //   覆われてモニターが見えなくなる事象に対応(HIROさん報告: ポップアップ表示中にツールが見えない)。
         //   FAB中心点の最前面要素が FAB 自身(or その子)でなければ覆われている →
@@ -4893,6 +5003,7 @@
     const _t0 = (window.performance && performance.now) ? performance.now() : Date.now();
     renderSettingsModal(modal);
     modal.classList.add('open');
+    try { const _f = document.getElementById('pb-fab'); if (_f) _f.style.display = 'none'; } catch (_) {}   // ★v2.3.54 設定中はFABを隠す
     try {
       const _dt = ((window.performance && performance.now) ? performance.now() : Date.now()) - _t0;
       pbLog('⏱','settings-open',`設定描画 ${Math.round(_dt)}ms (商品${loadConfig().products.length}件)`);
@@ -4901,6 +5012,7 @@
   function closeSettingsModal() {
     const m = $('#pb-modal');
     if (m) m.classList.remove('open');
+    try { const _f = document.getElementById('pb-fab'); if (_f) _f.style.display = ''; } catch (_) {}   // ★v2.3.54 FAB再表示
   }
   function renderSettingsModal(modal) {
     const cfg = loadConfig();
@@ -5148,7 +5260,7 @@
     // 閉じるには ✕ ボタンか「💾 保存して閉じる」を使う
     modal.querySelector('#pb-add-product').onclick = () => {
       const c = loadConfig();
-      if (c.products.length >= 100) { alert('最大100個までです'); return; }
+      if (c.products.length >= 100) { toolAlert('最大100個までです'); return; }
       c.products.push({
         id: uuid(), url: '', name: '',
         kind: 'new', release_time: null, quantity: 1, acquired: false, use_timer: true, notes: '',
@@ -5160,7 +5272,7 @@
       const c = loadConfig();
       const json = JSON.stringify(c, null, 2);
       try {
-        navigator.clipboard.writeText(json).then(() => alert('✅ 設定JSONをクリップボードにコピー'));
+        navigator.clipboard.writeText(json).then(() => toolAlert('✅ 設定JSONをクリップボードにコピー'));
       } catch (e) {
         prompt('設定JSON(コピーしてください):', json);
       }
@@ -5209,12 +5321,12 @@
         if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.products)) {
           status.textContent = '❌ 形式不正(products 配列が見つからない)'; status.style.color='#ff8888'; return;
         }
-        if (!confirm(`📥 インポート確認\n\n商品数: ${parsed.products.length}件\nacquired済: ${parsed.products.filter(p=>p.acquired).length}件\nkeepalive: ${(parsed.keepalive&&parsed.keepalive.enabled)?'有効':'無効'}\n\n現在の設定を上書きしますか?`)) return;
+        if (!toolConfirm(`📥 インポート確認\n\n商品数: ${parsed.products.length}件\nacquired済: ${parsed.products.filter(p=>p.acquired).length}件\nkeepalive: ${(parsed.keepalive&&parsed.keepalive.enabled)?'有効':'無効'}\n\n現在の設定を上書きしますか?`)) return;
         try {
           saveConfig(parsed);
           pbLog('📥','import',`設定インポート完了: 商品${parsed.products.length}件`);
           overlay.remove();
-          alert('✅ 設定インポート完了\n\n商品リスト・設定を反映しました。');
+          toolAlert('✅ 設定インポート完了\n\n商品リスト・設定を反映しました。');
           renderSettingsModal(modal);
         } catch (e) {
           status.textContent = '❌ 保存失敗: ' + e.message;
@@ -5229,7 +5341,7 @@
       const c = loadConfig();
       const wh = (c.notify || {}).discord_webhook;
       if (!wh) {
-        alert('Discord webhook が未設定です。「7. 通知」セクションで設定してください。');
+        toolAlert('Discord webhook が未設定です。「7. 通知」セクションで設定してください。');
         return;
       }
       btn.disabled = true;
@@ -5296,9 +5408,9 @@
           });
         }
         pbLog('📤','send-logs',`Discord送信完了: ${logs.length}件のログ`);
-        alert(`✅ Discord に送信完了\n\n・状態スナップショット\n・直近 ${errors.length} 件の警告/エラー\n・直近 ${logs.length} 件のイベントログ\n\nDiscordチャンネルを確認してください。`);
+        toolAlert(`✅ Discord に送信完了\n\n・状態スナップショット\n・直近 ${errors.length} 件の警告/エラー\n・直近 ${logs.length} 件のイベントログ\n\nDiscordチャンネルを確認してください。`);
       } catch (err) {
-        alert('❌ Discord送信失敗: ' + err.message);
+        toolAlert('❌ Discord送信失敗: ' + err.message);
       }
       btn.disabled = false;
       btn.textContent = orig;
@@ -5310,12 +5422,12 @@
         const r = exportLogToCsv('full');
         if (r.ok) {
           pbLog('📥','csv-export',`CSV ダウンロード(全タブ統合): ${r.count}件 → ${r.fname}`);
-          alert(`✅ CSV 保存しました\n\nファイル名: ${r.fname}\n件数: ${r.count} 件 (全タブ統合・時刻順)`);
+          toolAlert(`✅ CSV 保存しました\n\nファイル名: ${r.fname}\n件数: ${r.count} 件 (全タブ統合・時刻順)`);
         } else {
-          alert('❌ CSV 保存失敗: ' + (r.error || 'unknown'));
+          toolAlert('❌ CSV 保存失敗: ' + (r.error || 'unknown'));
         }
       } catch (err) {
-        alert('❌ CSV 保存失敗: ' + (err && err.message ? err.message : err));
+        toolAlert('❌ CSV 保存失敗: ' + (err && err.message ? err.message : err));
       }
     };
     // ★Phase 9-M (2026-06-03): CSV ダウンロード — 重要のみ (全タブ)
@@ -5325,19 +5437,19 @@
         const r = exportLogToCsv('critical');
         if (r.ok) {
           pbLog('📥','csv-export',`CSV ダウンロード(重要・全タブ): ${r.count}件 → ${r.fname}`);
-          alert(`✅ CSV 保存しました\n\nファイル名: ${r.fname}\n件数: ${r.count} 件 (重要のみ・全タブ統合)`);
+          toolAlert(`✅ CSV 保存しました\n\nファイル名: ${r.fname}\n件数: ${r.count} 件 (重要のみ・全タブ統合)`);
         } else {
-          alert('❌ CSV 保存失敗: ' + (r.error || 'unknown'));
+          toolAlert('❌ CSV 保存失敗: ' + (r.error || 'unknown'));
         }
       } catch (err) {
-        alert('❌ CSV 保存失敗: ' + (err && err.message ? err.message : err));
+        toolAlert('❌ CSV 保存失敗: ' + (err && err.message ? err.message : err));
       }
     };
     modal.querySelector('#pb-reset-state').onclick = () => {
-      if (!confirm('試行履歴のみリセットします。\n\n・カート確保済みフラグ\n・リロード回数\n・停止状態\n・アクセス制限カウンタ\n\nを初期化(商品リスト・通知設定は保持)。\n\n実行しますか?')) return;
+      if (!toolConfirm('試行履歴のみリセットします。\n\n・カート確保済みフラグ\n・リロード回数\n・停止状態\n・アクセス制限カウンタ\n\nを初期化(商品リスト・通知設定は保持)。\n\n実行しますか?')) return;
       localStorage.removeItem(STATE_KEY);
       pbLog('🔄','reset','試行履歴をリセット');
-      alert('✅ 試行履歴をリセットしました');
+      toolAlert('✅ 試行履歴をリセットしました');
       closeSettingsModal();
       location.reload();
     };
@@ -5345,10 +5457,10 @@
       const c = loadConfig();
       const acquiredCount = c.products.filter(p => p.acquired).length;
       if (acquiredCount === 0) {
-        alert('「カートイン済」になっている商品はありません。');
+        toolAlert('「カートイン済」になっている商品はありません。');
         return;
       }
-      if (!confirm(`${acquiredCount}件の商品の「カートイン済」フラグを一括解除します。\n\n・実カートの状態とは関係なく、設定上のフラグのみ解除します\n・解除後、各商品ページで通常の連打試行が再開されます\n・商品リスト自体は削除しません\n\n実行しますか?`)) return;
+      if (!toolConfirm(`${acquiredCount}件の商品の「カートイン済」フラグを一括解除します。\n\n・実カートの状態とは関係なく、設定上のフラグのみ解除します\n・解除後、各商品ページで通常の連打試行が再開されます\n・商品リスト自体は削除しません\n\n実行しますか?`)) return;
       c.products.forEach(p => { p.acquired = false; });
       saveConfig(c);
       // doneIds もリセット
@@ -5357,11 +5469,11 @@
       s.productAttempts = {};
       saveState(s);
       pbLog('🔓','reset',`${acquiredCount}件の acquired を一括解除`);
-      alert(`✅ ${acquiredCount}件の「カートイン済」フラグを解除しました`);
+      toolAlert(`✅ ${acquiredCount}件の「カートイン済」フラグを解除しました`);
       renderSettingsModal(modal);  // モーダル再描画
     };
     modal.querySelector('#pb-reset-all').onclick = () => {
-      if (!confirm('全設定を削除します(商品リスト含め全削除)。よろしいですか?')) return;
+      if (!toolConfirm('全設定を削除します(商品リスト含め全削除)。よろしいですか?')) return;
       localStorage.removeItem(CONFIG_KEY);
       localStorage.removeItem(STATE_KEY);
       localStorage.removeItem(META_KEY);
@@ -5419,9 +5531,9 @@
         collectAndSave(modal);
         const r = await runKeepaliveOnce(true);  // forceManual=true
         if (r.ok) {
-          alert(`✅ キープアライブテスト成功\n\nダミー商品をカートに追加→削除しました(${r.addedRemoved}件)。\nカート保持タイマーが60分にリセットされます。\n\n使用URL: ${(r.usedUrl||'').substring(0,60)}\n\n本番では ${(loadConfig().keepalive||{}).interval_minutes||50}分ごとに自動実行されます。`);
+          toolAlert(`✅ キープアライブテスト成功\n\nダミー商品をカートに追加→削除しました(${r.addedRemoved}件)。\nカート保持タイマーが60分にリセットされます。\n\n使用URL: ${(r.usedUrl||'').substring(0,60)}\n\n本番では ${(loadConfig().keepalive||{}).interval_minutes||50}分ごとに自動実行されます。`);
         } else if (r.skipped) {
-          alert(`⚠ キープアライブ実行スキップ\n\n理由: ${r.skipped}\n\n・disabled = 設定が無効\n・no-dummies = ダミーURL未設定\n・cart-empty = カート空(本来はキープ不要)\n・access-control = アクセス制限中\n\nスキップ条件を解消してから再テストしてください。`);
+          toolAlert(`⚠ キープアライブ実行スキップ\n\n理由: ${r.skipped}\n\n・disabled = 設定が無効\n・no-dummies = ダミーURL未設定\n・cart-empty = カート空(本来はキープ不要)\n・access-control = アクセス制限中\n\nスキップ条件を解消してから再テストしてください。`);
         } else if (r.fail === 'all-dummies-failed' || r.fail === 'single-attempt-failed') {
           // ★全URL失敗 → 各URLの失敗理由を一覧表示
           const lines = (r.failures || []).map((f, i) => {
@@ -5443,12 +5555,12 @@
             else detail = f.fail;
             return `${i+1}. ${u}\n   ${detail}`;
           }).join('\n\n');
-          alert(`❌ 登録ダミー${(r.failures||[]).length}件すべて失敗\n\n${lines}\n\n💡 cart前=後 で件数変化なしなら:\n・cartHadExpected=true → 既存ダミーを削除できなかった\n・false かつ HTTP=200 → サーバが追加を拒否(他原因)\n→ プレバンのカートを直接開いて中身を確認、不要な物を削除して再テスト`);
+          toolAlert(`❌ 登録ダミー${(r.failures||[]).length}件すべて失敗\n\n${lines}\n\n💡 cart前=後 で件数変化なしなら:\n・cartHadExpected=true → 既存ダミーを削除できなかった\n・false かつ HTTP=200 → サーバが追加を拒否(他原因)\n→ プレバンのカートを直接開いて中身を確認、不要な物を削除して再テスト`);
         } else if (r.fail) {
-          alert(`❌ キープアライブ失敗\n\n原因: ${r.fail}${r.detail?'\n詳細: '+r.detail:''}\n\nダミーURLが正しい商品ページか確認してください。`);
+          toolAlert(`❌ キープアライブ失敗\n\n原因: ${r.fail}${r.detail?'\n詳細: '+r.detail:''}\n\nダミーURLが正しい商品ページか確認してください。`);
         }
       } catch (err) {
-        alert('❌ テスト実行中エラー: ' + err.message);
+        toolAlert('❌ テスト実行中エラー: ' + err.message);
       }
       btn.disabled = false;
       btn.textContent = orig;
@@ -5499,7 +5611,7 @@
       };
       delBtn.onclick = (e) => {
         e.preventDefault();
-        if (!confirm('このダミーURLを削除しますか?')) return;
+        if (!toolConfirm('このダミーURLを削除しますか?')) return;
         // 削除前に全 input の値を保存(他の入力中値が消えないよう)
         const cur = collectDummyUrls(modal);
         cur.splice(idx, 1);
@@ -5626,7 +5738,7 @@
         e.preventDefault(); e.stopPropagation();
         const u = (det.querySelector('.p-url').value || p.url || '').trim();
         if (u) window.open(u, '_blank');
-        else alert('URL未設定');
+        else toolAlert('URL未設定');
       };
       // カートイン済チェックの即時保存(チェック ON → 即 acquired=true)
       // ★re-render しない(details の開閉状態を維持) → バッジだけ in-place 更新
@@ -5719,7 +5831,7 @@
       }
       det.querySelector('.p-del').onclick = (e) => {
         e.preventDefault(); e.stopPropagation();
-        if (!confirm('この商品を削除しますか?')) return;
+        if (!toolConfirm('この商品を削除しますか?')) return;
         const c = loadConfig();
         c.products = c.products.filter(x => x.id !== p.id);
         saveConfig(c);
@@ -5860,7 +5972,11 @@
     });
     // ★Phase 14: モーダルに UI が無いオプションは既存値を退避して引き継ぐ(保存で消さない)
     const _prevOpts = c.options || {};
+    // ★v2.3.54 (2026-10-29 発見): 旧は画面にある項目だけで options を作り直していたため、 画面に項目が無い設定
+    //   (⚡高速 fast_reload_mode・在庫データ判定など)が「💾保存」のたびに消えて既定へ戻っていた
+    //   (⚡ONで設定を保存すると⚡がOFFに戻る)。 既存値を引き継いでから画面の値で上書きする。
     c.options = {
+      ..._prevOpts,
       post_success_action: modal.querySelector('#pb-psa').value,
       auto_nuke_when_empty: modal.querySelector('#pb-auto-nuke').checked,
       low_power_mode: modal.querySelector('#pb-low-power').checked,
@@ -6236,7 +6352,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.53 2026-10-28 20:32 #f0780d JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.55 2026-10-29 01:18 #060a66 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6246,6 +6362,8 @@
     //   対策: alert/confirm を横取りして★ネイティブダイアログを出さず、 文言をログに記録して即続行★。
     //   → ブロック/フリーズ/手動クローズが消え、 中身も分かる(今まで取れなかったデータ)。 サイトJSは即 return 相当で継続。
     //   ※@grant none によりページ文脈で動くため window.alert 上書きがサイトの alert 呼出に効く。
+    //   ★v2.3.54: 横取りは「サイトの」ダイアログ専用。 ツール自身の確認/お知らせは toolAlert/toolConfirm
+    //   (読込時に退避した本物)で出す(旧: confirm 常時OKで商品削除/全設定削除が無確認実行されていた)。
     try {
       if (!window._pbDialogHooked) {
         window._pbDialogHooked = true;
@@ -6487,7 +6605,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.53 2026-10-28 20:32 #f0780d JST');
+    lines.push('🔧 build: v2.3.55 2026-10-29 01:18 #060a66 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
