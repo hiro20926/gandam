@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.52 2026-07-14 23:59 #720b6e JST
+// @version      v2.3.53 2026-10-28 20:32 #f0780d JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -527,6 +527,17 @@
       //   「2.5秒台/1秒未満連発」の機械的リズムを読ませない。 描画待ちで既に空いていれば追加待ちゼロ=遅くならない。
       try {
         const _opts = (loadConfig().options || {});
+        if (_opts.fast_reload_mode === true) {
+          // ★2026-10-28 ⚡高速リロード(restock狙い): 人間ペース待機をスキップ。 ただし一定間隔=BOT検知を避けるため
+          //   毎回 0.1〜0.3秒(既定)のランダム揺らぎだけ乗せる(ページ読込自体の変動と二重で非周期化)。
+          //   Safari保護(上の窓ガード)は残るので実効は約2秒床。 サブ秒連発にはならない。
+          const _fMin = _opts.fast_reload_jitter_min_ms != null ? _opts.fast_reload_jitter_min_ms : 100;
+          const _fMax = _opts.fast_reload_jitter_max_ms != null ? _opts.fast_reload_jitter_max_ms : 300;
+          const _fWait = Math.round(_fMin + Math.random() * Math.max(0, _fMax - _fMin));
+          try { pbLog('⚡','fast-reload',`高速リロード: 揺らぎ+${_fWait}ms (label=${label||''})`); } catch(_){}
+          try { updateUI({ status: `⚡ 高速リロード ${(_fWait/1000).toFixed(2)}秒 → リロード` }); } catch(_){}
+          if (await interruptibleSleep(_fWait)) { return; }  // 停止押下で中断
+        } else {
         const _hMin = _opts.human_reload_min_ms != null ? _opts.human_reload_min_ms : 3000;
         const _hJit = _opts.human_reload_jitter_ms != null ? _opts.human_reload_jitter_ms : 2500;
         const _lastReload = hist.length ? hist[hist.length - 1] : 0;
@@ -542,6 +553,7 @@
             try { updateUI({ status: `🚶 人間ペース待機 ${(_wait/1000).toFixed(1)}秒 → リロード` }); } catch(_){}
             if (await interruptibleSleep(_wait)) { return; }  // 停止押下で中断(リロードしない)
           }
+        }
         }
       } catch (_) {}
       // 履歴に今回の reload を追加
@@ -1182,6 +1194,13 @@
         //     下限2秒＋揺らぎ0〜2秒(=2.0〜4.0秒のランダム)。 毎回違う不規則さは維持。
         human_reload_min_ms: 2000,
         human_reload_jitter_ms: 2000,
+        // ★2026-10-28 (HIROさん要望): ⚡高速リロードトグル(restock狙い用)。 既定OFF=人間ペース2〜4秒。
+        //   ON=人間ペース待機をスキップし、 一定間隔でBOT検知されないよう毎回ランダム揺らぎだけ乗せて即リロード。
+        //   床は約2秒(Safari保護=10秒5回)なのでサブ秒連発にはならない。 状態は設定に保存=リロード跨ぎで維持。
+        //   ★FABの⚡ボタンでON/OFF。 押下/在庫判定/10連打/成功判定には一切影響しない(リロード間隔のみ)。
+        fast_reload_mode: false,
+        fast_reload_jitter_min_ms: 100,   // ⚡ON時の揺らぎ下限(ms)
+        fast_reload_jitter_max_ms: 300,   // ⚡ON時の揺らぎ上限(ms)
         // 小窓が出るまで待つ上限(=死んだページ救出のみ)。 遅いだけの応答はこの範囲で待ち切る。
         //   90秒 完全沈黙 = "遅い"ではなく"壊れている" と判断してリロード (HIROさん指定)。
         realbutton_popup_wait_ms: 90000,
@@ -2220,14 +2239,25 @@
       if (detectCartAddedPopup()) { outcome = 'added'; break; }
       const bs = buttonState();
       if (bs.reason === 'ALREADY_IN_CART' || bs.reason === 'LIMIT') { outcome = 'added'; break; }
-      const bodyText = (document.body && document.body.innerText) || '';
+      // ★2026-10-28 (実ページ item-1000257635 で成功判定の誤爆を根治): エラー文言は「ページ本文全体」でなく、
+      //   表示中の小窓(ポップアップ/モーダル)の中だけから読む。 予約商品の定型注意書き
+      //   「準備数量に達し次第…ご予約お申込み受付を終了」が本文に常在し、 CLEAR_ERR_RE/ERR_RE の「受付終了」に
+      //   誤爆→押下直後(~14ms)に毎回「error」誤断定していた(=7月「全押下 realbtn-error-popup」の正体)。
+      //   小窓スコープなら注意書き(小窓の外)は拾わず、 本物のエラー小窓だけを拾う。 抑止alert(_laMsg)は従来どおり併用。
+      let _popText = '';
+      try {
+        const _pm = document.querySelectorAll('.direct_cart_inner, [class*="direct_cart"], [role="dialog"], [class*="modal"], [class*="popup"]');
+        for (const _m of _pm) {
+          if (_m.getClientRects && _m.getClientRects().length) _popText += ' ' + (_m.innerText || _m.textContent || '');
+        }
+      } catch (_) {}
       // ★Phase 32: エラーもネイティブ alert() で来て Phase 31 が抑止する場合がある → 直近の抑止alert文言も見る
       let _laMsg = '';
       try { const _la = window._pbLastAlert; if (_la && (Date.now() - _la.at < 4000)) _laMsg = _la.msg || ''; } catch (_) {}
-      // ★明確な「未追加」エラー(混雑/売切れ)は即 error(高速再試行、二重リスク無し)
-      if (CLEAR_ERR_RE.test(bodyText) || CLEAR_ERR_RE.test(_laMsg)) { outcome = 'error'; break; }
+      // ★明確な「未追加」エラー(混雑/売切れ)は即 error(高速再試行、二重リスク無し) — 小窓/抑止alertのみ(本文全体は見ない)
+      if (CLEAR_ERR_RE.test(_popText) || CLEAR_ERR_RE.test(_laMsg)) { outcome = 'error'; break; }
       // ★それ以外の error文言/未知の閉じる小窓 = 曖昧 → すぐ error 断定せず成功小窓の描画を猶予待ち
-      let _isErrLike = ERR_RE.test(bodyText) || ERR_RE.test(_laMsg);
+      let _isErrLike = ERR_RE.test(_popText) || ERR_RE.test(_laMsg);
       if (!_isErrLike) {
         try {
           const _cands = $$('button, a, span, div');
@@ -4435,7 +4465,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.52 2026-07-14 23:59 #720b6e JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.53 2026-10-28 20:32 #f0780d JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -4448,6 +4478,7 @@
       <button class="btn-pause" style="width:100%;margin-top:6px;padding:8px;background:linear-gradient(180deg,#d4001a,#8a0014);color:#fff;font-weight:bold;font-size:12px;border:1px solid #ff3344;">⏸ 停止</button>
       <div class="btn-bottom-row">
         <button class="btn-settings" style="flex:1;">⚙ 設定</button>
+        <button class="btn-fast-reload" style="flex:0 0 auto;background:#333;color:#aaa;" title="リロードを高速化(restock狙い)。ONでも0.1〜0.3秒のランダム揺らぎ付き。普段はOFF推奨">⚡ 高速</button>
         <button class="btn-cache-clear" style="flex:0 0 auto;background:#8a6f2c;color:#fff;" title="Cookie+Cache を即削除(PB-CART設定は保持)">🍪 クリア</button>
       </div>
     `;
@@ -4563,6 +4594,31 @@
         setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1500);
       }
     };
+    // ★2026-10-28 ⚡高速リロードトグル(restock狙い・既定OFF)。 状態は設定に保存=リロードしても維持(毎boot再描画)。
+    //   ONでリロードの人間ペース待機をスキップ→0.1〜0.3秒ランダムで即リロード。 押下/在庫判定/10連打/成功判定には無影響。
+    const _fastBtn = fab.querySelector('.btn-fast-reload');
+    if (_fastBtn) {
+      const _paintFast = () => {
+        const on = (loadConfig().options || {}).fast_reload_mode === true;
+        _fastBtn.textContent = on ? '⚡ 高速ON' : '⚡ 高速OFF';
+        _fastBtn.style.background = on ? 'linear-gradient(180deg,#ffb000,#c97a00)' : '#333';
+        _fastBtn.style.color = on ? '#1a1308' : '#aaa';
+        _fastBtn.style.fontWeight = on ? 'bold' : 'normal';
+      };
+      _paintFast();
+      _fastBtn.onclick = () => {
+        try {
+          const c = loadConfig();
+          c.options = c.options || {};
+          const next = !(c.options.fast_reload_mode === true);
+          c.options.fast_reload_mode = next;
+          saveConfig(c);
+          _paintFast();
+          pbLog(next ? '⚡' : '🚶', 'fast-reload', `高速リロード ${next ? 'ON(0.1〜0.3秒揺らぎ・人間ペース待機スキップ)' : 'OFF(人間ペース2〜4秒に戻す)'} に切替`);
+          try { updateUI({ status: next ? '⚡ 高速リロード ON' : '🚶 人間ペース に戻しました' }); } catch(_){}
+        } catch (e) { try { pbLog('❌','fast-reload','切替エラー: '+e.message); } catch(_){} }
+      };
+    }
     pbLog('✅','ui','floating UI injected');
     return true;
   }
@@ -6180,7 +6236,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.52 2026-07-14 23:59 #720b6e JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.53 2026-10-28 20:32 #f0780d JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6431,7 +6487,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.52 2026-07-14 23:59 #720b6e JST');
+    lines.push('🔧 build: v2.3.53 2026-10-28 20:32 #f0780d JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
