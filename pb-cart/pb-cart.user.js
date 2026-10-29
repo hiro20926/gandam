@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.62 2026-10-29 21:20 #16ba09 JST
+// @version      v2.3.63 2026-10-29 23:22 #74e9da JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -404,13 +404,14 @@
   // ★人間操作風のランダム sleep(bot 検知の主要因「時間間隔の規則性」を排除)
   //   base ms ± jitter%(デフォルト ±50%、 例: 100ms → 50-150ms ランダム)
   //   さらに 5% の確率で 1-3秒の「考える時間」を追加(人間が画面を見る時間を模す)
-  function humanSleep(baseMs, jitterRatio) {
+  //   ★v2.3.63: noThink=true で「考える時間」を付けない(⚡高速ONの売切れ→リロード用)。
+  function humanSleep(baseMs, jitterRatio, noThink) {
     const j = jitterRatio == null ? 0.5 : jitterRatio;
     const min = Math.max(0, baseMs * (1 - j));
     const max = baseMs * (1 + j);
     let actual = min + Math.random() * (max - min);
     // 5% の確率で 「考える時間」を追加(1-3秒)
-    if (Math.random() < 0.05) actual += 1000 + Math.random() * 2000;
+    if (!noThink && Math.random() < 0.05) actual += 1000 + Math.random() * 2000;
     return sleep(Math.round(actual));
   }
 
@@ -817,6 +818,9 @@
     'ui-front',                    // ★Phase 25 FAB最前面復帰 (サイトモーダルに覆われたFABを前面へ)
     'render',                      // ★Phase 19 遅延描画待ち (白いシェル→商品描画の待機計測)
     'akamai-block',                // ★Phase 22 Akamai防御強化検知→クールダウン
+    // ★v2.3.63 (10/29 ログ検証): v2.3.61 の白画面診断が非critical(2秒まとめ保存)で、 白画面の
+    //   0.2〜1.1秒後のリロードで14件中13件消えていた。 縮小表示(zoom-fix)も同じ理由で残らなかった。
+    'white-page', 'zoom-fix',
   ]);
   // ★タブ ID (sessionStorage、 タブ独立 + reload 跨ぎで安定。 事故 5 paused と同じ流儀)
   const TAB_ID = (() => {
@@ -890,6 +894,12 @@
     }
     if (_mergedSaveTimer) return;
     _mergedSaveTimer = setTimeout(() => { flushMergedLog(); _lastFlushAt = Date.now(); }, 2000);
+  }
+  // ★v2.3.63: リロード直前に必ず残したい行(10回目の押下結果・白画面の中身)用の同期保存。
+  //   上の間引き(400ms以内は500ms後/2秒後にまとめる)だと、 直後の reload() で消えることがあった
+  //   (10/29 ログ: 10回目の結果が5セット中4セットで欠落)。 呼ぶのはリロード前の待ち時間がある所だけ。
+  function flushMergedLogNow() {
+    try { flushMergedLog(); _lastFlushAt = Date.now(); } catch (_) {}
   }
   // ★Phase 9-RR2 (2026-05-29) 継続: reload 直前は軽量 flush のみ (LOG_BUFFER 8KB)。
   //   統合ストア (重い) は beforeunload で触らない → reload 速度維持。
@@ -2923,20 +2933,31 @@
           //   旧: #buy が出てから気づくまで平均0.1秒・最大0.2秒遅れていた(HIROさん「1回目が目視で遅い」)。
           await waitForBuyOrTimeout(200);
         }
-        pbLog(_rendered ? '🖼' : '⏳', 'render',
-          _rendered ? `商品描画を確認(待ち${Date.now()-_rt0}ms) → ボタン判定へ`
-                    : `${_rWaitCap}ms 待っても #buy 未描画 → そのまま判定へ(白いシェル/無ボタンページ)`);
         // ★v2.3.61 (診断・2026-10-29): 8秒白いページの中身を1行記録(正体の特定用。 読むだけ・通信なし)。
         //   10連打の直後や、 押していなくても連続して白くなる時間帯(10/29 18:17, 20:39〜20:42)がある。
+        // ★v2.3.63: render 行より"前"に記録 → render 行の即時保存に乗せて確実に残す(旧は直後のリロードで消えた)。
+        //   本文・要素数からツール自身の枠(pb-fab 等)を除外(旧は「本文61字」が全部ツールのボタン文字だった)。
+        //   readyState(書き込み途中か)・script数(判定スクリプトが居るか)も記録。
         if (!_rendered) {
           try {
-            const _bt = ((document.body && document.body.innerText) || '').replace(/\s+/g, ' ').trim();
+            let _bt = '', _ne = 0;
+            for (const _c of (document.body ? Array.from(document.body.children) : [])) {
+              if (_c.id && /^pb-/.test(_c.id)) continue;   // ツール自身の枠は数えない
+              _ne += 1 + _c.getElementsByTagName('*').length;
+              // script/style は画面に出ない(innerText だと中身のソースが混ざる)ので本文に数えない
+              if (!/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|LINK|META)$/.test(_c.tagName)) _bt += ' ' + (_c.innerText || '');
+            }
+            _bt = _bt.replace(/\s+/g, ' ').trim();
             pbLog('🔎', 'white-page',
               `白い画面の中身: title="${(document.title || '').slice(0, 40)}" 本文${_bt.length}字="${_bt.slice(0, 60)}" ` +
-              `要素${document.body ? document.body.getElementsByTagName('*').length : -1} ` +
+              `要素${_ne} script${document.scripts ? document.scripts.length : -1} readyState=${document.readyState} ` +
               `viewport指定=${document.querySelector('meta[name="viewport"]') ? 'あり' : 'なし'} url=${location.pathname.slice(0, 40)}`);
           } catch (_) {}
         }
+        pbLog(_rendered ? '🖼' : '⏳', 'render',
+          _rendered ? `商品描画を確認(待ち${Date.now()-_rt0}ms) → ボタン判定へ`
+                    : `${_rWaitCap}ms 待っても #buy 未描画 → そのまま判定へ(白いシェル/無ボタンページ)`);
+        if (!_rendered) flushMergedLogNow();   // ★v2.3.63: 白画面の2行を確実に保存(既に4秒待った後なので速度影響なし)
       }
       let bsEarly = buttonState();
       // ★v2.3.54 (2026-10-29 実機計測): ⚡高速ON時、 在庫データで売切れ確定(×/全て在庫無し)なら
@@ -3227,7 +3248,10 @@
         //   人らしい間隔・ゆらぎを担うので、 人為的な上乗せランダムは不要。 リロード前は最小sleepのみ、
         //   間隔は次boot時の描画待ちで自然に決まる。 (Phase29bの1-4秒ジッターは廃止)
         updateUI({ status: _sj.ready ? `🔍 在庫無し(${_sj.mark}) → 監視継続` : '🔍 在庫データ待ち → リロード' });
-        await humanSleep(timing().grey_mid_reload_sleep_ms);
+        // ★v2.3.63 (HIROさん承認): ⚡高速ON の時だけ「5%で1〜3秒の考える時間」を外す。
+        //   10/29 ログ: ⚡ON の売切れ→リロード840回中46回(5.5%)が1.2〜3.2秒余分に止まっていた。
+        //   ⚡の設計(待ちは safeReload の0.1〜0.3秒の揺らぎだけ)に合わせる。 通常モードは従来どおり。
+        await humanSleep(timing().grey_mid_reload_sleep_ms, null, (cfg.options || {}).fast_reload_mode === true);
         if (loadState().paused === true) { updateUI(); return; }
         await safeReload(_sj.ready ? 'phase29-soldout' : 'phase29-no-data');
         return;
@@ -3685,6 +3709,8 @@
     // ★RETRY_LIMIT 失敗 → 監視方式で分岐
     //   新方式: ポーリングに戻る(リロードせず、サーバ負荷ゼロ)
     //   旧方式: 実リロード(従来通り)
+    // ★v2.3.63: 10回目の押下結果がリロードで消えないよう、 ここで同期保存(この後リロード前の待ちがあるので速度影響なし)。
+    flushMergedLogNow();
     const s5 = loadState();
     const at5 = s5.productAttempts[target.id] || { reloads: 0 };
     at5.reloads += 1;
@@ -4638,7 +4664,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.62 2026-10-29 21:20 #16ba09 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.63 2026-10-29 23:22 #74e9da JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -6553,7 +6579,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.62 2026-10-29 21:20 #16ba09 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.63 2026-10-29 23:22 #74e9da JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6806,7 +6832,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.62 2026-10-29 21:20 #16ba09 JST');
+    lines.push('🔧 build: v2.3.63 2026-10-29 23:22 #74e9da JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
