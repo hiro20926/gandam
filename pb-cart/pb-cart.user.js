@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.57 2026-10-29 20:10 #be387e JST
+// @version      v2.3.59 2026-10-29 20:27 #5b0d44 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1209,6 +1209,14 @@
         // ★2026-07-14 (HIROさん): 2回目以降の押下間隔を 1〜3秒のランダムに(1回目は即押し)。 一定速度=BOT検知回避。
         realbtn_press_gap_min_ms: 1000,
         realbtn_press_gap_jitter_ms: 2000,
+        // ★v2.3.58 (C, HIROさん要望): 🔥連打 ON の時の押下間隔(0.3〜0.8秒ランダム)。 既定 OFF。
+        //   サーバの応答(約0.1〜0.2秒)+成功小窓の猶予(added_popup_grace_ms 0.7秒)は ON でも残る(二重カートイン防止)。
+        rapid_press_mode: false,
+        rapid_press_gap_min_ms: 300,
+        rapid_press_gap_jitter_ms: 500,
+        // ★v2.3.58 (D, HIROさん承認・検証用): 1ページあたりの連打回数(3〜10、 既定10)。
+        //   10回押し切った直後のページが8秒以上白くなる(10/29 ログで12/12)ため、 9回で白画面を避けられるか試す用。
+        realbtn_press_limit: 10,
         // ★2026-07-06 (4fix-④ HIROさん): 嫌がらせポップアップを閉じた後、 青ボタンの活性復帰をこの時間だけ待つ。
         //   混雑/一瞬グレーではリロードせず青の復帰を待って押す。 確定在庫切れ(×)の時だけ即リロード。
         blue_wait_ms: 1500,
@@ -1282,6 +1290,8 @@
           human_reload_jitter_ms: def.options.human_reload_jitter_ms,
           realbtn_press_gap_min_ms: def.options.realbtn_press_gap_min_ms,
           realbtn_press_gap_jitter_ms: def.options.realbtn_press_gap_jitter_ms,
+          rapid_press_gap_min_ms: def.options.rapid_press_gap_min_ms,
+          rapid_press_gap_jitter_ms: def.options.rapid_press_gap_jitter_ms,
         },
         keepalive: { ...def.keepalive, ...(c.keepalive || {}) },
         notify: { ...def.notify, ...(c.notify || {}) },
@@ -1816,10 +1826,24 @@
     const TRIGGER_WORDS = opts.keepSuccess
       ? new RegExp(_HARASS)
       : new RegExp(_HARASS + '|カートに商品が追加されました|カートに追加しました');
+    // ★v2.3.58 (B): サイトの購入小窓(.direct_cart)は × を合成クリックせず、 サイトの × と同じ処理
+    //   (visible クラスを外す)で閉じる。 旧: 1回の呼び出しで × を3回クリック(非表示の小窓の × まで)
+    //   → 10連打1セットで約117回の合成クリック。 サイトのボット対策(STCLab BotManager)はクリック間隔を全部記録している。
+    //   閉じる対象の判定(TRIGGER_WORDS / keepSuccess)は従来と同じ。 結果判定は表示中の小窓だけを見るので影響なし。
+    try {
+      for (const _dc of document.querySelectorAll('.direct_cart.visible')) {
+        if (TRIGGER_WORDS.test(_dc.innerText || '')) { _dc.classList.remove('visible'); dismissed++; }
+      }
+    } catch (_) {}
+    // ★v2.3.58 (B): 購入小窓(.direct_cart)の中は一切押さない(上のクラス外しで閉じる)。 画面に出ていない要素も押さない。
+    //   ※この小窓は閉じても height:0+overflow:hidden で隠れるだけ(display:none ではない)ため、 文言も × も
+    //     「描画中」扱いのまま残る → 旧来は閉じ済みの小窓の × を呼ぶたびに押し続けていた(2026-10-29 実機確認)。
+    const _inDirectCart = (e) => { try { return !!(e.closest && e.closest('.direct_cart')); } catch (_) { return false; } };
+    const _shown = (e) => { try { return e.getClientRects().length > 0 && !_inDirectCart(e); } catch (_) { return false; } };
     // 1. 「閉じる」「✕」「×」テキストを持つボタン
     const closeCandidates = $$('button, a, span, div').filter(e => {
       const t = (e.innerText || '').trim();
-      return t === '閉じる' || t === '✕' || t === '×' || t === 'OK';
+      return (t === '閉じる' || t === '✕' || t === '×' || t === 'OK') && _shown(e);
     });
     for (const c of closeCandidates) {
       let p = c, depth = 0;
@@ -1833,7 +1857,7 @@
       }
     }
     // 2. CSSクラスに close を含む要素(ツールチップ用)
-    const tipCloses = $$('[class*="close"], [aria-label*="close" i], [aria-label*="閉じる"]');
+    const tipCloses = $$('[class*="close"], [aria-label*="close" i], [aria-label*="閉じる"]').filter(_shown);
     for (const c of tipCloses) {
       let p = c, depth = 0;
       while (p && depth < 6) {
@@ -1862,18 +1886,20 @@
           const own = Array.from(e.childNodes).filter(n => n.nodeType === 3).map(n => n.textContent).join('');
           if (_BOXRE.test(own)) { _txtEl = e; break; }
         }
+        // ★v2.3.58 (B): 閉じ済みの購入小窓(高さ0で隠れているだけ)の文言なら構造ログも出さない(呼ぶたびの連発を止める)
+        const _closedDc = !!(_txtEl && _txtEl.closest && _txtEl.closest('.direct_cart:not(.visible)'));
         let _scope = _txtEl, _up = 0;
         while (_scope && _up < 6) {
           if (_scope.querySelectorAll && _scope.querySelectorAll('button, a, input, [role=button], [onclick]').length > 0) break;
           _scope = _scope.parentElement; _up++;
         }
         _scope = _scope || _txtEl;
-        const _btns = _scope ? Array.from(_scope.querySelectorAll('button, a, input, [role=button], [onclick]')) : [];
+        const _btns = _scope ? Array.from(_scope.querySelectorAll('button, a, input, [role=button], [onclick]')).filter(_shown) : [];
         // ★構造ログ(本物の閉じる特定用): 枠内クリック要素を tag.class'text'表示/非表示 で記録(URLは出さない=フィルタ回避)
         const _desc = _btns.slice(0, 8).map(b =>
           `${b.tagName}.${(b.className || '').toString().replace(/\s+/g, '.').slice(0,18)}'${((b.innerText || b.value || '').trim()).slice(0,10)}'${b.offsetParent !== null ? 'v' : 'h'}`
         ).join(' ');
-        pbLog('🔎', 'popup-struct', `注文不可アラート 枠=${_scope ? _scope.tagName + '.' + (_scope.className || '').toString().slice(0,18) : '?'} btns[${_btns.length}]: ${_desc}`);
+        if (!_closedDc) pbLog('🔎', 'popup-struct', `注文不可アラート 枠=${_scope ? _scope.tagName + '.' + (_scope.className || '').toString().slice(0,18) : '?'} btns[${_btns.length}]: ${_desc}`);
         // ★枠内の「閉じる/✕/×/close/exit」を直接click(page全体でなく枠内に限定 → 実体に当たりやすい)
         let _clicked = 0;
         for (const b of _btns) {
@@ -2668,6 +2694,28 @@
     };
     document.addEventListener('visibilitychange', window._pbMainLoopVisHandler);
   }
+  // ★v2.3.58 (A): #buy/#buy_side の出現を MutationObserver で待つ(最大 ms)。 出現 or 時間切れで resolve。
+  //   document を監視するので、 ページが documentElement ごと差し替えても追従する。
+  function waitForBuyOrTimeout(ms) {
+    return new Promise((resolve) => {
+      let _done = false, _mo = null, _t = null;
+      const _fin = () => {
+        if (_done) return;
+        _done = true;
+        try { if (_mo) _mo.disconnect(); } catch (_) {}
+        try { clearTimeout(_t); } catch (_) {}
+        resolve();
+      };
+      try {
+        _mo = new MutationObserver(() => {
+          if (document.getElementById('buy') || document.getElementById('buy_side')) _fin();
+        });
+        _mo.observe(document, { childList: true, subtree: true });
+      } catch (_) {}
+      _t = setTimeout(_fin, ms);
+    });
+  }
+
   async function mainLoop() {
     // ★v2.3.54: reload()/遷移を呼んだ後の旧ページでは監視しない(二重リロード防止)。 5秒経っても
     //   ページが切り替わらない異常時は解除(監視が止まりっぱなしにならないよう)。
@@ -2862,7 +2910,9 @@
           if (loadState().paused === true) { updateUI(); return; }
           if (isSettingsModalOpen()) break;
           if (document.getElementById('buy') || document.getElementById('buy_side')) { _rendered = true; break; }
-          await sleep(200);
+          // ★v2.3.58 (A): 200ms 毎の確認 → ボタン出現の瞬間に起きる(MutationObserver)。 最大200msで従来どおり再確認。
+          //   旧: #buy が出てから気づくまで平均0.1秒・最大0.2秒遅れていた(HIROさん「1回目が目視で遅い」)。
+          await waitForBuyOrTimeout(200);
         }
         pbLog(_rendered ? '🖼' : '⏳', 'render',
           _rendered ? `商品描画を確認(待ち${Date.now()-_rt0}ms) → ボタン判定へ`
@@ -3079,9 +3129,12 @@
     //   新方式(軽量ポーリング): SAFE モードでも10回維持
     //                        (リロードしないからリソース要求過多にならない、回数を絞る意義薄)
     //   旧方式(実リロード): SAFE モードのみ3回(リロード負荷を抑える従来の意図)
+    // ★v2.3.58 (D): 1ページの連打回数を設定で変えられる(3〜10、 既定10)。
+    const _pressLimit = Math.max(3, Math.min(MAX_RETRY_PER_CYCLE,
+      parseInt((cfg.options || {}).realbtn_press_limit, 10) || MAX_RETRY_PER_CYCLE));
     let RETRY_LIMIT = (useSafeMode && !useLightPoll)
       ? SAFE_MAX_RETRY_PER_CYCLE
-      : MAX_RETRY_PER_CYCLE;
+      : _pressLimit;
     // ★Phase 9-7: 警戒モード判定 (発売後 N 分以内なら連打上限を 3 回に制限 + grey-mid に 5〜10秒ジッター)
     const _alertMode = isAlertMode(cfg, target);
     if (_alertMode) {
@@ -3585,13 +3638,16 @@
         if (loadState().paused === true) { updateUI(); return; }
         // ★2026-07-14 (HIROさん): 1回目は即押し(ここは押下"後"の間隔)、 2回目以降は 1〜3秒のランダム。
         //   一定速度の連打=BOT検知材料なので、 押下ごとに間隔をバラす。
-        const _pgMin = (cfg.options || {}).realbtn_press_gap_min_ms || 1000;
-        const _pgJit = (cfg.options || {}).realbtn_press_gap_jitter_ms || 2000;
-        const _gap = Math.round(_pgMin + Math.random() * _pgJit);   // 既定 1000〜3000ms ランダム
+        // ★v2.3.58 (C): 🔥連打 ON なら 0.3〜0.8秒ランダム。 押下ごとに設定を読み直す(連打中の切替も次の押下から効く)。
+        const _po = loadConfig().options || {};
+        const _rapid = _po.rapid_press_mode === true;
+        const _pgMin = _rapid ? (_po.rapid_press_gap_min_ms || 300) : (_po.realbtn_press_gap_min_ms || 1000);
+        const _pgJit = _rapid ? (_po.rapid_press_gap_jitter_ms || 500) : (_po.realbtn_press_gap_jitter_ms || 2000);
+        const _gap = Math.round(_pgMin + Math.random() * _pgJit);   // 既定 1000〜3000ms / 🔥 300〜800ms ランダム
         await sleep(_gap);
         if (loadState().paused === true) { updateUI(); return; }
         if (i === 0 || (i + 1) % 3 === 0) {
-          pbLog('🔁','attempt',`本物ボタン反応駆動: 小窓閉じ+${_gap}ms間隔 → 次押下 (${i+1}/${RETRY_LIMIT})`);
+          pbLog('🔁','attempt',`本物ボタン反応駆動: 小窓閉じ+${_gap}ms間隔${_rapid ? '(🔥連打)' : ''} → 次押下 (${i+1}/${RETRY_LIMIT})`);
         }
       } else {
         // 旧 iframe 方式の反応駆動 wait(realbutton_retry=false のフォールバック時のみ)
@@ -4562,7 +4618,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.57 2026-10-29 20:10 #be387e JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.59 2026-10-29 20:27 #5b0d44 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -4573,10 +4629,13 @@
       </details>
       <button class="btn-register-here" style="width:100%;margin-top:6px;padding:8px;min-height:40px;background:linear-gradient(180deg,#5fd47f,#2a9c4d);color:#000;font-weight:bold;font-size:13px;display:none;">📌 このページを商品に登録</button>
       <button class="btn-pause" style="width:100%;margin-top:6px;padding:8px;min-height:44px;background:linear-gradient(180deg,#d4001a,#8a0014);color:#fff;font-weight:bold;font-size:15px;border:1px solid #ff3344;">⏸ 停止</button>
+      <div class="btn-bottom-row btn-speed-row">
+        <button class="btn-fast-reload" style="flex:1;background:#333;color:#aaa;" title="リロードを高速化(restock狙い)。ONでも0.1〜0.3秒のランダム揺らぎ付き。普段はOFF推奨">⚡ 高速</button>
+        <button class="btn-rapid-press" style="flex:1;background:#333;color:#aaa;" title="青ボタンを押す間隔を0.3〜0.8秒ランダムに(通常1〜3秒)。普段はOFF推奨">🔥 連打</button>
+      </div>
       <div class="btn-bottom-row">
         <button class="btn-settings" style="flex:1;">⚙ 設定</button>
-        <button class="btn-fast-reload" style="flex:0 0 auto;background:#333;color:#aaa;" title="リロードを高速化(restock狙い)。ONでも0.1〜0.3秒のランダム揺らぎ付き。普段はOFF推奨">⚡ 高速</button>
-        <button class="btn-cache-clear" style="flex:0 0 auto;background:#8a6f2c;color:#fff;" title="Cookie+Cache を即削除(PB-CART設定は保持)">🍪 クリア</button>
+        <button class="btn-cache-clear" style="flex:1;background:#8a6f2c;color:#fff;" title="Cookie+Cache を即削除(PB-CART設定は保持)">🍪 クリア</button>
       </div>
     `;
     // ★アコーディオン開閉状態を記憶 (sessionStorage、 タブ独立)
@@ -4720,6 +4779,31 @@
           pbLog(next ? '⚡' : '🚶', 'fast-reload', `高速リロード ${next ? 'ON(0.1〜0.3秒揺らぎ・人間ペース待機スキップ)' : 'OFF(人間ペース2〜4秒に戻す)'} に切替`);
           try { updateUI({ status: next ? '⚡ 高速リロード ON' : '🚶 人間ペース に戻しました' }); } catch(_){}
         } catch (e) { try { pbLog('❌','fast-reload','切替エラー: '+e.message); } catch(_){} }
+      };
+    }
+    // ★v2.3.58 (C) 🔥連打トグル(既定OFF)。 ONで青ボタンを押す間隔を 0.3〜0.8秒ランダムに(OFF=1〜3秒)。
+    //   状態は設定に保存=リロードしても維持。 リロード間隔(⚡)とは独立。 押下判定・成功判定には無影響。
+    const _rapidBtn = fab.querySelector('.btn-rapid-press');
+    if (_rapidBtn) {
+      const _paintRapid = () => {
+        const on = (loadConfig().options || {}).rapid_press_mode === true;
+        _rapidBtn.textContent = on ? '🔥 連打ON' : '🔥 連打OFF';
+        _rapidBtn.style.background = on ? 'linear-gradient(180deg,#ff5a36,#c2260f)' : '#333';
+        _rapidBtn.style.color = on ? '#fff' : '#aaa';
+        _rapidBtn.style.fontWeight = on ? 'bold' : 'normal';
+      };
+      _paintRapid();
+      _rapidBtn.onclick = () => {
+        try {
+          const c = loadConfig();
+          c.options = c.options || {};
+          const next = !(c.options.rapid_press_mode === true);
+          c.options.rapid_press_mode = next;
+          saveConfig(c);
+          _paintRapid();
+          pbLog('🔥', 'rapid-press', `連打 ${next ? 'ON(押下間隔0.3〜0.8秒ランダム)' : 'OFF(押下間隔1〜3秒ランダムに戻す)'} に切替`);
+          try { updateUI({ status: next ? '🔥 連打 ON' : '連打を通常に戻しました' }); } catch(_){}
+        } catch (e) { try { pbLog('❌','rapid-press','切替エラー: '+e.message); } catch(_){} }
       };
     }
     pbLog('✅','ui','floating UI injected');
@@ -4957,8 +5041,8 @@
 
     // ── 今の動作 (連打/待機/リロード) ── statusTxt から要約
     let act = '';
-    const mAtt = statusTxt.match(/(\d+)\s*\/\s*(10|RETRY)/);
-    if (/連打|投入|カート投入/.test(statusTxt) && mAtt) act = `🛒${mAtt[1]}/10`;
+    const mAtt = statusTxt.match(/(\d+)\s*\/\s*(\d+)/);
+    if (/連打|投入|カート投入/.test(statusTxt) && mAtt) act = `🛒${mAtt[1]}/${mAtt[2]}`;   // ★v2.3.58: 連打回数が10以外でも正しく表示
     else if (mode === 'waiting') act = '💤待機';
     else if (mode === 'paused') act = '停止中';
     else if (target) {
@@ -5174,6 +5258,14 @@
             </div>
           </div>
           <div style="margin-top:10px;">
+            <label>🔢 <strong>1ページの連打回数</strong>(3〜10回、 既定10)</label>
+            <input type="number" id="pb-press-limit" min="3" max="10" style="width:100px;margin-left:24px;">
+            <div style="font-size:11px;color:#b8a988;margin:4px 0 0 24px;line-height:1.5;">
+              10回押し切った直後のページは、 サイト側の反応で白いまま(8秒以上)になりやすい。<br>
+              9回にすると白い画面を避けられるかの検証用。 普段は10のまま。
+            </div>
+          </div>
+          <div style="margin-top:10px;">
             <label><input type="checkbox" id="pb-foreground-only"> 📱 <strong>表示中のタブだけ動かす(iOS向け)</strong></label>
             <div style="font-size:11px;color:#b8a988;margin:4px 0 0 24px;line-height:1.5;">
               今表示しているタブだけ監視・投入。 裏に回したタブは自動で停止し、 再び表示すると再開。<br>
@@ -5265,6 +5357,7 @@
     modal.querySelector('#pb-low-power').checked = !!cfg.options.low_power_mode;
     modal.querySelector('#pb-lightweight-polling').checked = !(cfg.options.lightweight_polling === false);
     { const _rb = modal.querySelector('#pb-realbutton-retry'); if (_rb) _rb.checked = !(cfg.options.realbutton_retry === false); }
+    { const _pl = modal.querySelector('#pb-press-limit'); if (_pl) _pl.value = cfg.options.realbtn_press_limit || 10; }
     { const _fg = modal.querySelector('#pb-foreground-only'); if (_fg) _fg.checked = !(cfg.options.foreground_only === false); }
     // ★明示的に true の時だけ ON、 デフォルト・未設定は OFF(再販品も監視するため)
     modal.querySelector('#pb-new-release-only').checked = cfg.options.new_release_only_mode === true;
@@ -6023,6 +6116,10 @@
         : (_prevOpts.realbutton_retry !== false)),
       realbutton_popup_wait_ms: _prevOpts.realbutton_popup_wait_ms || 90000,
       realbtn_press_gap_ms: _prevOpts.realbtn_press_gap_ms || 500,
+      // ★v2.3.58 (D): 1ページの連打回数(3〜10)
+      realbtn_press_limit: (modal.querySelector('#pb-press-limit')
+        ? Math.max(3, Math.min(10, parseInt(modal.querySelector('#pb-press-limit').value, 10) || 10))
+        : (_prevOpts.realbtn_press_limit || 10)),
       // ★Phase 17: 表示中タブのみ稼働。 チェックボックスで切替、 無ければ既存値維持
       foreground_only: (modal.querySelector('#pb-foreground-only')
         ? modal.querySelector('#pb-foreground-only').checked
@@ -6380,7 +6477,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.57 2026-10-29 20:10 #be387e JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.59 2026-10-29 20:27 #5b0d44 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6633,7 +6730,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.57 2026-10-29 20:10 #be387e JST');
+    lines.push('🔧 build: v2.3.59 2026-10-29 20:27 #5b0d44 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
