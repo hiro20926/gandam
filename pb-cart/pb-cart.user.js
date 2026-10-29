@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.60 2026-10-29 20:56 #5b5188 JST
+// @version      v2.3.61 2026-10-29 21:12 #6ac766 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -2920,6 +2920,17 @@
         pbLog(_rendered ? '🖼' : '⏳', 'render',
           _rendered ? `商品描画を確認(待ち${Date.now()-_rt0}ms) → ボタン判定へ`
                     : `${_rWaitCap}ms 待っても #buy 未描画 → そのまま判定へ(白いシェル/無ボタンページ)`);
+        // ★v2.3.61 (診断・2026-10-29): 8秒白いページの中身を1行記録(正体の特定用。 読むだけ・通信なし)。
+        //   10連打の直後や、 押していなくても連続して白くなる時間帯(10/29 18:17, 20:39〜20:42)がある。
+        if (!_rendered) {
+          try {
+            const _bt = ((document.body && document.body.innerText) || '').replace(/\s+/g, ' ').trim();
+            pbLog('🔎', 'white-page',
+              `白い画面の中身: title="${(document.title || '').slice(0, 40)}" 本文${_bt.length}字="${_bt.slice(0, 60)}" ` +
+              `要素${document.body ? document.body.getElementsByTagName('*').length : -1} ` +
+              `viewport指定=${document.querySelector('meta[name="viewport"]') ? 'あり' : 'なし'} url=${location.pathname.slice(0, 40)}`);
+          } catch (_) {}
+        }
       }
       let bsEarly = buttonState();
       // ★v2.3.54 (2026-10-29 実機計測): ⚡高速ON時、 在庫データで売切れ確定(×/全て在庫無し)なら
@@ -4621,7 +4632,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.60 2026-10-29 20:56 #5b5188 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.61 2026-10-29 21:12 #6ac766 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -4818,7 +4829,7 @@
   //   原因(サイト側): 商品ページの最初の応答は白いボット判定ページで viewport 指定が無い → iPhone は 980px 幅で
   //   縮小表示し、 約1.5〜2秒後に本物のページ(width=device-width)へ置き換わって等倍に戻る。 毎リロードで FAB も
   //   縮んで戻り、 ⚡ON では1ページの約9割の時間が縮小状態だった(10/29 ログ)= 停止ボタン等が押しづらい。
-  //   対策: 縮小されている間だけ FAB を縮小率の逆数で拡大し、 右下の余白も合わせる(画面上は等倍時と同じ見た目)。
+  //   対策: 縮小されている間だけ FAB を縮小率の逆数で拡大する(CSS zoom・v2.3.61。 画面上は等倍時と同じ見た目)。
   //   ・サイトのページ(viewport 等)には一切触れない。 動くのは visualViewport の resize 通知(縮小/復帰の瞬間)と
   //     FAB 作成時だけ。 タイマー・全体走査なし。 等倍(0.95以上)では何もしない。 失敗時も何もしない(従来表示)。
   //   ・options.fab_zoom_fix=false(⚙設定)で無効化。
@@ -4830,16 +4841,14 @@
       const s = Number(vv.scale) || 1;
       const enabled = (loadConfig().options || {}).fab_zoom_fix !== false;
       if (!enabled || s >= 0.95) {
-        if (fab.style.transform) {   // 縮小から戻った → 素の CSS に戻す
-          fab.style.transform = ''; fab.style.transformOrigin = ''; fab.style.right = ''; fab.style.bottom = '';
-        }
+        if (fab.style.zoom) fab.style.zoom = '';   // 縮小から戻った → 素の CSS に戻す
         return;
       }
+      // ★v2.3.61 (HIROさん「拡大すると画像解像度が落ちる」): transform:scale は縮小状態で描いた小さい絵を
+      //   引き伸ばすため iPhone Safari でぼやけた。 CSS zoom は枠そのものを大きなサイズで組み直して描くので
+      //   文字がくっきり出る。 zoom は right/bottom の余白も同じ倍率で効くので位置の補正も不要。
       const k = Math.min(4, 1 / s);   // 念のため上限4倍
-      fab.style.transformOrigin = '100% 100%';
-      fab.style.transform = `scale(${k.toFixed(3)})`;
-      fab.style.right = `${Math.round(8 * k)}px`;
-      fab.style.bottom = `calc((120px + env(safe-area-inset-bottom, 0px)) * ${k.toFixed(3)})`;
+      fab.style.zoom = k.toFixed(3);
       // 動作確認用ログ: 倍率が前回記録と違う時だけ1行(毎ページは出さない)
       try {
         const _key = 'pb_cart_v2_zoomfix_logged';
@@ -6538,7 +6547,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.60 2026-10-29 20:56 #5b5188 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.61 2026-10-29 21:12 #6ac766 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6791,7 +6800,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.60 2026-10-29 20:56 #5b5188 JST');
+    lines.push('🔧 build: v2.3.61 2026-10-29 21:12 #6ac766 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
