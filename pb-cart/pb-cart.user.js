@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.61 2026-10-29 21:12 #6ac766 JST
+// @version      v2.3.62 2026-10-29 21:20 #16ba09 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1258,6 +1258,9 @@
         // ★Phase 19 (2026-06-10): p-bandai 遅延描画(白いシェル→数秒後に商品DOM)対応。
         //   #buy が未描画なら最大この時間まで描画を待ってから判定(描画前リロード地獄を防ぐ)。
         render_wait_max_ms: 8000,
+        // ★v2.3.62 (HIROさん案): ⚡高速ON の時だけ白いページの見切りを短くする(既定4秒)。 通常モードは上の8秒のまま。
+        //   10/28〜29 ログ: 描画に4秒超かかったのは1442ページ中5件(0.35%)、 8秒白は33件(2.2%)。
+        render_wait_fast_ms: 4000,
         // ★Phase 22 (2026-06-11): Akamai 防御強化(発売殺到時のブロック/ホーム弾き返し)検知時のクールダウン。
         //   即リロードせずこの時間待ってから再確認(まだ弾かれていればまた待つ / 解けていれば即購入再開)。
         //   ★HIROさん要望(6/11): ブロックが途中で解けても買い逃さないよう短め=15秒で「こまめに再確認」。
@@ -2905,7 +2908,10 @@
       //     - ボタンが出たら即抜けて通常判定へ(発売時の青検知の速さは維持: #buy が在れば待たない)
       //     - 上限まで出なければそのまま進む(本当にボタンの無いページ等)
       if (!document.getElementById('buy') && !document.getElementById('buy_side')) {
-        const _rWaitCap = (cfg.options || {}).render_wait_max_ms || 8000;
+        // ★v2.3.62: ⚡高速ON の時だけ白いページの見切りを4秒に(HIROさん案)。 通常モードは8秒のまま。
+        const _rWaitCap = ((cfg.options || {}).fast_reload_mode === true)
+          ? ((cfg.options || {}).render_wait_fast_ms || 4000)
+          : ((cfg.options || {}).render_wait_max_ms || 8000);
         const _rt0 = Date.now();
         let _rendered = false;
         updateUI({ status: '🖼 商品ページ描画待ち(白いシェル検知)' });
@@ -4632,7 +4638,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.61 2026-10-29 21:12 #6ac766 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.62 2026-10-29 21:20 #16ba09 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -6547,7 +6553,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.61 2026-10-29 21:12 #6ac766 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.62 2026-10-29 21:20 #16ba09 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6800,7 +6806,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.61 2026-10-29 21:12 #6ac766 JST');
+    lines.push('🔧 build: v2.3.62 2026-10-29 21:20 #16ba09 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
