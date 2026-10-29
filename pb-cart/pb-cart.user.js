@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.55 2026-10-29 01:18 #060a66 JST
+// @version      v2.3.57 2026-10-29 20:10 #be387e JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -4132,7 +4132,7 @@
         /* ★Phase 10 (2026-06-04): アコーディオン化に伴いサイズを可変に
            折りたたみ=コンパクト / 展開=必要分だけ伸びる。 max-height で画面内に収め、
            はみ出す分は .pb-detail を内部スクロールさせる (旧 min-height:240px 固定を撤廃) */
-        width: 220px;
+        width: 236px;   /* ★v2.3.56: 220→236(下段ボタンを大きくした分) */
         max-height: 80vh;
         box-sizing: border-box;
         display: flex; flex-direction: column;
@@ -4218,6 +4218,8 @@
         background: #ff7700; color: #fff; border: 0; border-radius: 3px; cursor: pointer; font-weight: bold;
       }
       #pb-fab .btn-settings { background: linear-gradient(180deg, #c9a85a 0%, #8a6f2c 100%); color: #1a1308; }
+      /* ★v2.3.56 (HIROさん「停止ボタン等が押しづらい」): 下段ボタンを指で押せる高さに(iPhone 推奨 44pt に近づける) */
+      #pb-fab .btn-bottom-row button { min-height: 40px; font-size: 12px; padding: 6px; margin: 0; white-space: nowrap; }
       #pb-modal {
         position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 2147483647;
         background: #000; display: none;  /* ★2026-07-06 (4fix-②): 半透明rgba(0,0,0,0.92)→不透明で背景ページの合成コストを排除(設定オープン時の数秒フリーズ対策) */
@@ -4560,7 +4562,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.55 2026-10-29 01:18 #060a66 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.57 2026-10-29 20:10 #be387e JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -4569,8 +4571,8 @@
           <div class="counter"></div>
         </div>
       </details>
-      <button class="btn-register-here" style="width:100%;margin-top:6px;padding:8px;background:linear-gradient(180deg,#5fd47f,#2a9c4d);color:#000;font-weight:bold;font-size:12px;display:none;">📌 このページを商品に登録</button>
-      <button class="btn-pause" style="width:100%;margin-top:6px;padding:8px;background:linear-gradient(180deg,#d4001a,#8a0014);color:#fff;font-weight:bold;font-size:12px;border:1px solid #ff3344;">⏸ 停止</button>
+      <button class="btn-register-here" style="width:100%;margin-top:6px;padding:8px;min-height:40px;background:linear-gradient(180deg,#5fd47f,#2a9c4d);color:#000;font-weight:bold;font-size:13px;display:none;">📌 このページを商品に登録</button>
+      <button class="btn-pause" style="width:100%;margin-top:6px;padding:8px;min-height:44px;background:linear-gradient(180deg,#d4001a,#8a0014);color:#fff;font-weight:bold;font-size:15px;border:1px solid #ff3344;">⏸ 停止</button>
       <div class="btn-bottom-row">
         <button class="btn-settings" style="flex:1;">⚙ 設定</button>
         <button class="btn-fast-reload" style="flex:0 0 auto;background:#333;color:#aaa;" title="リロードを高速化(restock狙い)。ONでも0.1〜0.3秒のランダム揺らぎ付き。普段はOFF推奨">⚡ 高速</button>
@@ -4731,7 +4733,7 @@
   //   対策: FAB(#pb-fab)が DOM から消えていたら _uiInjected を戻して再注入し、 監視も再開する。
   //   window は当該ページ生存中ずっと残るので setInterval が効く(全面リロード時は新規 boot で作り直される)。
   //   ※ #pb-fab が健在なら getElementById チェックだけで即 return(コスト極小・チラつきなし)。
-  function ensureFloatingUI() {
+  function ensureFloatingUI(src) {
     try {
       if (!document.body) return;
       const _fab = document.getElementById('pb-fab');
@@ -4771,8 +4773,11 @@
       _uiInjected = false;
       injectFloatingUI();
       try { renderErrorPanel(); } catch (_) {}
+      // ★v2.3.56: 作り直した FAB は「起動中…」の初期文言 → 前回と同じ内容でも必ず描き直す
+      //   (旧: 差分キャッシュで描画が省かれ、 DOM 差し替え後ずっと「起動中…」表示のままになっていた)
+      try { _lastSumLine = ''; _lastDetect = ''; } catch (_) {}
       try { updateUI(); } catch (_) {}
-      pbLog('🔁','ui-heal','FAB消失検知 → 再注入(ページがDOMを差し替えた)');
+      pbLog('🔁','ui-heal',`FAB消失検知${src === 'mo' ? '(即時)' : ''} → 再注入(ページがDOMを差し替えた)`);
       // 差し替え後に描画された本体(#buy 等)を監視するため mainLoop を再起動(paused は尊重)
       try { if (loadState().paused !== true) setTimeout(mainLoop, 0); } catch (_) {}
     } catch (e) {}
@@ -4780,6 +4785,29 @@
   function startFabSelfHeal() {
     if (window._pbFabHealTimer) return;
     try { window._pbFabHealTimer = setInterval(ensureFloatingUI, 700); } catch (_) {}
+    // ★v2.3.56 (2026-10-29 HIROさん「停止ボタン等が押しづらい」): DOM 差し替えを即検知して即再注入。
+    //   700ms 毎の確認だけだと差し替え→再注入まで平均0.35秒・最大0.7秒 FAB が消えており、
+    //   ⚡ON(約2秒周期)では「リロード中の空白」と合わせて1周期に2回 FAB が消えて押せなかった。
+    //   document を監視(documentElement ごと差し替えられても追従)。 FAB 健在時は getElementById だけで即終了。
+    //   700ms の setInterval は保険として残す(最前面復帰・設定中の非表示もそちら)。
+    try {
+      if (!window._pbFabHealMO && typeof MutationObserver === 'function') {
+        window._pbFabHealMO = new MutationObserver(() => {
+          if (document.getElementById('pb-fab')) return;
+          // 差し替えが連続する間は 150ms に1回だけ(サイトが何度も消す場合の再注入の連発を防ぐ)
+          const _now = Date.now();
+          if (_now - (window._pbFabHealMoAt || 0) < 150) {
+            if (!window._pbFabHealMoTimer) {
+              window._pbFabHealMoTimer = setTimeout(() => { window._pbFabHealMoTimer = null; ensureFloatingUI('mo'); }, 150);
+            }
+            return;
+          }
+          window._pbFabHealMoAt = _now;
+          ensureFloatingUI('mo');
+        });
+        window._pbFabHealMO.observe(document, { childList: true, subtree: true });
+      }
+    } catch (_) {}
   }
 
   function updateUI(extra) {
@@ -6352,7 +6380,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.55 2026-10-29 01:18 #060a66 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.57 2026-10-29 20:10 #be387e JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6605,7 +6633,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.55 2026-10-29 01:18 #060a66 JST');
+    lines.push('🔧 build: v2.3.57 2026-10-29 20:10 #be387e JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
