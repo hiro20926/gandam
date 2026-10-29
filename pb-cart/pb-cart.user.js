@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         PB-CART (プレバンカート支援)
 // @namespace    https://github.com/hiro/pb-cart
-// @version      v2.3.59 2026-10-29 20:27 #5b0d44 JST
+// @version      v2.3.60 2026-10-29 20:56 #5b5188 JST
 // @description  プレミアムバンダイ カート投入支援ツール v2 (UserScript完結型)
 // @match        *://p-bandai.jp/*
 // @match        *://www.p-bandai.jp/*
@@ -1217,6 +1217,9 @@
         // ★v2.3.58 (D, HIROさん承認・検証用): 1ページあたりの連打回数(3〜10、 既定10)。
         //   10回押し切った直後のページが8秒以上白くなる(10/29 ログで12/12)ため、 9回で白画面を避けられるか試す用。
         realbtn_press_limit: 10,
+        // ★v2.3.60 (A, HIROさん承認): サイトの白いページ(ボット判定)で iPhone が画面を縮小表示している間も、
+        //   ボタン枠(FAB)を等倍の大きさ・位置に保つ。 false で従来表示(縮小と一緒に小さくなる)。
+        fab_zoom_fix: true,
         // ★2026-07-06 (4fix-④ HIROさん): 嫌がらせポップアップを閉じた後、 青ボタンの活性復帰をこの時間だけ待つ。
         //   混雑/一瞬グレーではリロードせず青の復帰を待って押す。 確定在庫切れ(×)の時だけ即リロード。
         blue_wait_ms: 1500,
@@ -4618,7 +4621,7 @@
           <span class="sum-caret">▼</span>
         </summary>
         <div class="pb-detail">
-          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.59 2026-10-29 20:27 #5b0d44 JST</span></div>
+          <div class="brand">PB<span>-</span>CART <span class="version">build v2.3.60 2026-10-29 20:56 #5b5188 JST</span></div>
           <div class="runstate"><span class="dot"></span><span class="rs-text">起動中</span></div>
           <div class="status">起動中…</div>
           <div class="detect"></div>
@@ -4806,8 +4809,54 @@
         } catch (e) { try { pbLog('❌','rapid-press','切替エラー: '+e.message); } catch(_){} }
       };
     }
+    try { fitFabToZoom(); hookFabZoomFix(); } catch (_) {}   // ★v2.3.60 (A) 縮小表示中も等倍
     pbLog('✅','ui','floating UI injected');
     return true;
+  }
+
+  // ★v2.3.60 (A, HIROさん承認 2026-10-29): 縮小表示中もボタン枠(FAB)を等倍に保つ。
+  //   原因(サイト側): 商品ページの最初の応答は白いボット判定ページで viewport 指定が無い → iPhone は 980px 幅で
+  //   縮小表示し、 約1.5〜2秒後に本物のページ(width=device-width)へ置き換わって等倍に戻る。 毎リロードで FAB も
+  //   縮んで戻り、 ⚡ON では1ページの約9割の時間が縮小状態だった(10/29 ログ)= 停止ボタン等が押しづらい。
+  //   対策: 縮小されている間だけ FAB を縮小率の逆数で拡大し、 右下の余白も合わせる(画面上は等倍時と同じ見た目)。
+  //   ・サイトのページ(viewport 等)には一切触れない。 動くのは visualViewport の resize 通知(縮小/復帰の瞬間)と
+  //     FAB 作成時だけ。 タイマー・全体走査なし。 等倍(0.95以上)では何もしない。 失敗時も何もしない(従来表示)。
+  //   ・options.fab_zoom_fix=false(⚙設定)で無効化。
+  function fitFabToZoom() {
+    try {
+      const fab = document.getElementById('pb-fab');
+      const vv = window.visualViewport;
+      if (!fab || !vv) return;
+      const s = Number(vv.scale) || 1;
+      const enabled = (loadConfig().options || {}).fab_zoom_fix !== false;
+      if (!enabled || s >= 0.95) {
+        if (fab.style.transform) {   // 縮小から戻った → 素の CSS に戻す
+          fab.style.transform = ''; fab.style.transformOrigin = ''; fab.style.right = ''; fab.style.bottom = '';
+        }
+        return;
+      }
+      const k = Math.min(4, 1 / s);   // 念のため上限4倍
+      fab.style.transformOrigin = '100% 100%';
+      fab.style.transform = `scale(${k.toFixed(3)})`;
+      fab.style.right = `${Math.round(8 * k)}px`;
+      fab.style.bottom = `calc((120px + env(safe-area-inset-bottom, 0px)) * ${k.toFixed(3)})`;
+      // 動作確認用ログ: 倍率が前回記録と違う時だけ1行(毎ページは出さない)
+      try {
+        const _key = 'pb_cart_v2_zoomfix_logged';
+        const _sv = s.toFixed(2);
+        if (sessionStorage.getItem(_key) !== _sv) {
+          sessionStorage.setItem(_key, _sv);
+          pbLog('🔍','zoom-fix',`縮小表示を検知(倍率${_sv}) → ボタン枠を×${k.toFixed(2)}で等倍表示`);
+        }
+      } catch (_) {}
+    } catch (_) {}
+  }
+  function hookFabZoomFix() {
+    try {
+      if (window._pbZoomFixHooked || !window.visualViewport) return;
+      window._pbZoomFixHooked = true;
+      window.visualViewport.addEventListener('resize', fitFabToZoom, { passive: true });
+    } catch (_) {}
   }
 
   // ★Phase 18 (2026-06-10): FAB 自己修復 — ページが読込後に DOM を丸ごと差し替え、 注入した UI を消す事象に対応。
@@ -5272,6 +5321,13 @@
               <strong>OFF にすると開いている全タブが並行で動きます</strong>(従来動作)。
             </div>
           </div>
+          <div style="margin-top:10px;">
+            <label><input type="checkbox" id="pb-fab-zoom-fix"> 🔍 <strong>縮小表示中もボタンを等倍に(推奨ON)</strong></label>
+            <div style="font-size:11px;color:#b8a988;margin:4px 0 0 24px;line-height:1.5;">
+              リロード直後はサイトの白い画面で iPhone が画面を縮小表示します。 その間もボタン枠を同じ大きさ・位置に保ちます。<br>
+              様子がおかしい時は OFF で従来の表示に戻ります(監視・押下には影響しません)。
+            </div>
+          </div>
         </section>
 
         <section>
@@ -5359,6 +5415,7 @@
     { const _rb = modal.querySelector('#pb-realbutton-retry'); if (_rb) _rb.checked = !(cfg.options.realbutton_retry === false); }
     { const _pl = modal.querySelector('#pb-press-limit'); if (_pl) _pl.value = cfg.options.realbtn_press_limit || 10; }
     { const _fg = modal.querySelector('#pb-foreground-only'); if (_fg) _fg.checked = !(cfg.options.foreground_only === false); }
+    { const _zf = modal.querySelector('#pb-fab-zoom-fix'); if (_zf) _zf.checked = !(cfg.options.fab_zoom_fix === false); }
     // ★明示的に true の時だけ ON、 デフォルト・未設定は OFF(再販品も監視するため)
     modal.querySelector('#pb-new-release-only').checked = cfg.options.new_release_only_mode === true;
     modal.querySelector('#pb-new-release-grace').value = cfg.options.new_release_grace_minutes != null ? cfg.options.new_release_grace_minutes : 30;
@@ -6124,6 +6181,10 @@
       foreground_only: (modal.querySelector('#pb-foreground-only')
         ? modal.querySelector('#pb-foreground-only').checked
         : (_prevOpts.foreground_only !== false)),
+      // ★v2.3.60 (A): 縮小表示中もボタン枠を等倍に
+      fab_zoom_fix: (modal.querySelector('#pb-fab-zoom-fix')
+        ? modal.querySelector('#pb-fab-zoom-fix').checked
+        : (_prevOpts.fab_zoom_fix !== false)),
     };
     c.keepalive = {
       enabled: modal.querySelector('#pb-ka-enabled').checked,
@@ -6477,7 +6538,7 @@
       const navs = performance.getEntriesByType ? performance.getEntriesByType('navigation') : null;
       if (navs && navs[0] && navs[0].type) _navType = ` nav=${navs[0].type}`;
     } catch (e) {}
-    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.59 2026-10-29 20:27 #5b0d44 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
+    pbLog('🚀','boot',`PB-CART v2 起動 build=v2.3.60 2026-10-29 20:56 #5b5188 JST path=${location.pathname.substring(0,50)}${_bootSinceNav!=null?` sinceNav=${_bootSinceNav}ms`:''}${_navType}${_heapStr}${_lsStr}`);
 
     // ★★★ Phase 31 (2026-07-01): ネイティブ alert()/confirm() を横取り ★★★
     //   実機確定(v2.3.33 で 80回ポップアップ・popup-struct=0/dismissed=0): 「注文できる商品がございません」
@@ -6730,7 +6791,7 @@
       lines.push('✅ 即時開始');
     }
     lines.push('▶ 動作中: 青=10連打 / グレー=即リロード');
-    lines.push('🔧 build: v2.3.59 2026-10-29 20:27 #5b0d44 JST');
+    lines.push('🔧 build: v2.3.60 2026-10-29 20:56 #5b5188 JST');
     pbLog('🎯','boot','target='+effectiveName(target));
     showBanner(lines, '#5fd47f', 3000);
   }
