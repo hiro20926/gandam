@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LONDO BELL Mobile β (localStorage版)
 // @namespace    londo-bell-mobile-beta
-// @version      1.2.202610311421-beta
-// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-10-31 14:21 JST]
+// @version      1.2.202610311429-beta
+// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-10-31 14:29 JST]
 // @match        https://www.gundam-base-entry.net/*
 // @match        https://gundam-base-entry.net/*
 // @run-at       document-end
@@ -377,6 +377,15 @@
       GM_setValue('lbStartTime', __lbStartTime);
     }
   } catch(e) {}
+
+  // 希望時間の🔄ボタン（ページ再読込なしの更新）も同じカウンタに数える。
+  // 再読込だけを数えていたため、/entry の🔄ループ中は数字が止まって見えていた。
+  // 停止後は数えない（停止時に lbReloadCount を消しているので書き戻さない）
+  function __lbCountRefresh() {
+    if (__lbStoppedByUser) return;
+    __lbReloadCount++;
+    try { GM_setValue('lbReloadCount', __lbReloadCount); } catch(e) {}
+  }
 
   // ============================================================
   // v18: 停止ボタン + カウンタを横一列にまとめる「コントロール行」
@@ -3810,6 +3819,7 @@ function proceedToTime() {
       const refreshBtn = findRefreshBtn();
       if (refreshBtn && !refreshBtn.disabled) {
         refreshRetryCount++;
+        __lbCountRefresh();
         refreshBtn.click();
         setTimeout(() => { if (!globalStopped) proceedToTime(); }, 500);
       } else {
@@ -3834,6 +3844,7 @@ function proceedToTime() {
       const rb = findRefreshBtn();
       if (rb && !rb.disabled) {
         chrome.runtime.sendMessage({ action: 'debugLog', message: '時間枠が表示されない→🔄で再取得' }).catch(() => {});
+        __lbCountRefresh();
         rb.click();
       }
     }
@@ -3851,6 +3862,7 @@ function proceedToTime() {
       action: 'refreshClicked',
       count: refreshRetryCount
     }).catch(() => {});
+    __lbCountRefresh();
     refreshBtn.click();
 
     // 🔄押すと選択がリセット＋APIで空き更新される
