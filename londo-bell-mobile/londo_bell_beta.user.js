@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LONDO BELL Mobile β (localStorage版)
 // @namespace    londo-bell-mobile-beta
-// @version      1.2.202607052057-beta
-// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-07-05 20:57 JST]
+// @version      1.2.202610311421-beta
+// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-10-31 14:21 JST]
 // @match        https://www.gundam-base-entry.net/*
 // @match        https://gundam-base-entry.net/*
 // @run-at       document-end
@@ -2811,13 +2811,57 @@ setInterval(() => {
 }, 1000);
 
 
+// サイトの要素IDは React useId の接頭辞付き（例: ":r5:-isTerms"）になったため、
+// 素のIDで見つからなければ末尾一致で探す
+function __lbById(name) {
+  return document.getElementById(name) || document.querySelector('[id$="-' + name + '"]');
+}
+
+// 同意チェック（プライバシー・利用規約）を時間待ちの間に済ませておく。
+// 🔄やリロードでは外れない（サイトが sessionStorage に保持）ので、空き検出後の手順を短縮できる。
+// クリックでダイアログが開く場合に備えて、1回に1つだけ押す
+function __lbEnsureConsents() {
+  if (!formData || !formData.agreeTerms) return;
+  if (document.querySelector('[role="alertdialog"], [role="dialog"]')) return;
+  const el = ['isPrivacy', 'isTerms'].map(__lbById)
+    .find(c => c && !c.disabled && c.getAttribute('aria-checked') !== 'true');
+  if (el) el.click();
+}
+
+// 利用規約ダイアログ（確認する押下後などに出る）を1手ずつ進める。
+// 本文を最後までスクロール → 「利用規約に同意する」が有効化 → チェック →
+// 「次回以降は表示しない」チェック（checkedTerm Cookie が付き、以降は出なくなる）→ 次へ
+// ダイアログが出ていれば true を返す（呼び出し側は次の周回で再度呼ぶ）
+function __lbHandleTermsDialog() {
+  const checkEl = __lbById('check');
+  if (!checkEl) return false;
+  const modal = checkEl.closest('[role="alertdialog"], [role="dialog"]') || document;
+  if (checkEl.disabled) {
+    const scrollArea = Array.from(modal.querySelectorAll('*'))
+      .filter(el => el.scrollHeight > el.clientHeight + 10)
+      .sort((a, b) => b.scrollHeight - a.scrollHeight)[0];
+    if (scrollArea) scrollArea.scrollTop = scrollArea.scrollHeight;
+    return true;
+  }
+  if (checkEl.getAttribute('aria-checked') !== 'true') { checkEl.click(); return true; }
+  const afterEl = __lbById('after');
+  if (afterEl && !afterEl.disabled && afterEl.getAttribute('aria-checked') !== 'true') { afterEl.click(); return true; }
+  const nextBtn = Array.from(modal.querySelectorAll('button'))
+    .find(b => b.textContent.trim() === '次へ' && !b.disabled);
+  if (nextBtn) {
+    nextBtn.click();
+    chrome.runtime.sendMessage({ action: 'debugLog', message: '利用規約ダイアログ: 次へをクリック' }).catch(() => {});
+  }
+  return true;
+}
+
 // ===== 承諾ポップアップ自動処理（軽量・既存サイクルに乗せるだけ） =====
 // hide-announcement: 「次回以降は表示しない」チェックボックスをIDで直接処理
 function handleConsentPopup() {
   const checkboxKeywords = ['プライバシーポリシー', 'プライバシー', 'privacy', '利用規約', '規約', 'terms', '18歳', '年齢', '成人', '次回以降は表示しない', '次回以降', '表示しない'];
 
   // hide-announcement（次回以降は表示しない）をIDで直接チェック
-  const hideAnnouncement = document.getElementById('hide-announcement');
+  const hideAnnouncement = __lbById('hide-announcement');
   if (hideAnnouncement) {
     const isChecked = hideAnnouncement.getAttribute('aria-checked') === 'true' ||
                       hideAnnouncement.getAttribute('data-state') === 'checked' ||
@@ -2826,8 +2870,8 @@ function handleConsentPopup() {
   }
 
   // お知らせポップアップ専用：スクロール→check→after→次へ
-  const checkEl = document.getElementById('check');
-  const afterEl = document.getElementById('after');
+  const checkEl = __lbById('check');
+  const afterEl = __lbById('after');
   if (checkEl && !checkEl.disabled) {
     // checkがenabledになっている → スクロール済み → チェックして次へ
     if (checkEl.getAttribute('aria-checked') !== 'true') checkEl.click();
@@ -3035,15 +3079,8 @@ function handleCurrentPage() {
     startErrorWatch(); // エラーダイアログ監視を即開始
     chrome.runtime.sendMessage({ action: 'confirmMonitoringStarted' }).catch(() => {});
 
-    // 少し待ってからもう一度エラーチェック（遅れて表示される場合）
-    setTimeout(() => {
-      if (hasTimeSlotError()) {
-        chrome.runtime.sendMessage({ action: 'debugLog', message: '/confirm 1秒後にエラー検知→入力に戻る' }).catch(() => {});
-        handleTimeSlotError();
-        return;
-      }
-      waitAndClickSubmit();
-    }, 1000);
+    // 遅れて出るエラーダイアログは waitAndClickSubmit が毎周回チェックするので待たずに開始
+    waitAndClickSubmit();
     return;
   }
   if (window.location.pathname === '/entry' || window.location.pathname.startsWith('/entry')) {
@@ -3279,7 +3316,9 @@ function startApiPolling() {
           ? shops.find(s => s.id === targetId)
           : shops.find(s => s.name === targetStore);
 
-        if (shop && shop.web_ticket_flag === true) {
+        // web_ticket_flag だけでは発行ボタンが押せない（disabled のまま）ことがある。
+        // 実際に押せるかは web_ticket_available で判定する（項目が無いAPIなら flag のみで判定）
+        if (shop && shop.web_ticket_flag === true && shop.web_ticket_available !== false) {
           // WEB整理券フラグがON！
           clearInterval(apiPollInterval);
           apiPollInterval = null;
@@ -3368,8 +3407,8 @@ function startApiPolling() {
 function agreeToTerms(onComplete) {
   chrome.runtime.sendMessage({ action: 'debugLog', message: '★ agreeToTerms開始' }).catch(() => {});
 
-  const isPrivacy = document.getElementById('isPrivacy');
-  const isTerms = document.getElementById('isTerms');
+  const isPrivacy = __lbById('isPrivacy');
+  const isTerms = __lbById('isTerms');
 
   // すでに両方チェック済みならスキップ
   if (isPrivacy?.getAttribute('aria-checked') === 'true' &&
@@ -3449,7 +3488,7 @@ function agreeToTerms(onComplete) {
 
         // 300ms後にisTermsをクリック → 完了後にonComplete
         setTimeout(() => {
-          const isTermsEl = document.getElementById('isTerms');
+          const isTermsEl = __lbById('isTerms');
           if (isTermsEl && isTermsEl.getAttribute('aria-checked') !== 'true') {
             isTermsEl.click();
             chrome.runtime.sendMessage({ action: 'debugLog', message: 'isTermsクリック完了' }).catch(() => {});
@@ -3530,6 +3569,14 @@ function fillForm(seiField, meiField, phoneField) {
       return proceedToTime();
     }
 
+    // リロード復帰時はサイトが希望日を保持している。選択済みの日付を押し直すと
+    // 時間枠一覧が消えて🔄ループが始まらないため、カレンダーは触らずに時間選択へ
+    const targetLabel = `${targetYear}/${String(targetMonth + 1).padStart(2, '0')}/${targetDay.padStart(2, '0')}`;
+    if (calBtn.textContent.trim() === targetLabel) {
+      chrome.runtime.sendMessage({ action: 'debugLog', message: `希望日${targetLabel}は選択済み→そのまま時間選択へ` }).catch(() => {});
+      return proceedToTime();
+    }
+
     calBtn.click();
     chrome.runtime.sendMessage({ action: 'debugLog', message: 'カレンダーを開きました' }).catch(() => {});
 
@@ -3550,6 +3597,12 @@ function fillForm(seiField, meiField, phoneField) {
 
       if (targetBtn) {
         clearInterval(waitCalendar);
+        if (targetBtn.getAttribute('aria-selected') === 'true') {
+          // 選択済み → 押し直さずカレンダーを閉じる（理由は上の targetLabel 判定と同じ）
+          calBtn.click();
+          setTimeout(() => proceedToTime(), 300);
+          return;
+        }
         targetBtn.click();
         chrome.runtime.sendMessage({ action: 'debugLog', message: `${targetMonth+1}/${targetDay}を選択しました` }).catch(() => {});
         setTimeout(() => proceedToTime(), 400);
@@ -3684,6 +3737,7 @@ function hasAnyTimeBtns() {
 }
 
 let refreshRetryCount = 0;
+let noTimeBtnsCount = 0;
 
 // v5.26.10: 10分間隔問題の原因調査用。proceedToTimeループのDOM状態を10回ごとに記録。
 // 既存ロジックには一切影響しない。
@@ -3742,6 +3796,8 @@ function proceedToTime() {
   }
 
   logProceedToTimeDiagnostics();  // v5.26.10: DOM状態ログ（10回ごと）
+  __lbEnsureConsents();   // 空き検出後すぐ「確認する」を押せるよう、待ちの間に同意を済ませる
+  __lbHandleTermsDialog();
   const available = getAvailableTimeBtns();
 
   // 空きがある → 選択して次へ（希望時間に一致するものがなければ🔄継続）
@@ -3769,11 +3825,22 @@ function proceedToTime() {
     return afterTimeSelected();
   }
 
-  // 時間ボタンが1つも表示されていない → まだ描画中の可能性、少し待つ
+  // 時間ボタンが1つも表示されていない → まだ描画中の可能性、少し待つ。
+  // 約1秒たっても出なければ一覧が消えたままと判断して🔄で取り直す（リロード復帰時など）
   if (!hasAnyTimeBtns()) {
+    noTimeBtnsCount++;
+    if (noTimeBtnsCount >= 2) {
+      noTimeBtnsCount = 0;
+      const rb = findRefreshBtn();
+      if (rb && !rb.disabled) {
+        chrome.runtime.sendMessage({ action: 'debugLog', message: '時間枠が表示されない→🔄で再取得' }).catch(() => {});
+        rb.click();
+      }
+    }
     setTimeout(() => { if (!globalStopped) proceedToTime(); }, 500);
     return;
   }
+  noTimeBtnsCount = 0;
 
   // 全満席 → 🔄ボタンで更新して永遠ループ（手動停止まで続ける）
   const refreshBtn = findRefreshBtn();
@@ -3858,18 +3925,19 @@ function afterTimeSelected() {
           if (forceStopped) return;
           confirmBtn.click();
           chrome.runtime.sendMessage({ action: 'confirmMonitoringStarted' }).catch(() => {});
-          setTimeout(() => { if (!forceStopped) waitAndClickSubmit(); }, 1000);
+          // 固定待ちなしで監視開始（利用規約ダイアログ・エラー・申し込みをするを周回ごとに判定）
+          waitAndClickSubmit();
         } else {
           clearInterval(waitConfirm);
           chrome.runtime.sendMessage({ action: 'debugLog', message: '時間未選択でconfirmBtn発見→時間選択からやり直し' }).catch(() => {});
           setTimeout(() => { if (!forceStopped) proceedToTime(); }, 500);
         }
       }
-      if (attempts > 300) { // 30秒待機
+      if (attempts > 600) { // 30秒待機
         clearInterval(waitConfirm);
         chrome.runtime.sendMessage({ action: 'debugLog', message: '確認するボタンタイムアウト(30秒)' }).catch(() => {});
       }
-    }, 100);
+    }, 50); // 時間ボタンの選択は数msで反映される（実測）ので、最初の周回で押せる
   }
 
   // 同意処理が必要な場合は完了後に「確認する」、不要なら即「確認する」
@@ -3896,10 +3964,13 @@ function waitAndClickSubmit() {
   chrome.runtime.sendMessage({ action: 'debugLog', message: '★ waitAndClickSubmit開始' }).catch(() => {});
   // /confirmページ遷移直後からエラーダイアログを監視
   let attempts = 0;
+  let termsSeen = false, termsSeenAt = 0, reconfirmed = false;
   const watcher = setInterval(() => {
     // ★ ループ内でも常に停止チェック
     if (forceStopped) { clearInterval(watcher); return; }
     if (globalStopped) { clearInterval(watcher); return; }
+    // 別経路の監視が先に押していたら終了（二重クリック防止）
+    if (confirmClicked) { clearInterval(watcher); return; }
     attempts++;
     // エラーダイアログを最優先で検知
     if (hasTimeSlotError()) {
@@ -3907,6 +3978,20 @@ function waitAndClickSubmit() {
       chrome.runtime.sendMessage({ action: 'debugLog', message: '/confirmでエラー検知→入力に戻る' }).catch(() => {});
       handleTimeSlotError();
       return;
+    }
+    // 確認する押下後の利用規約ダイアログ（出ていれば1手進めて次の周回へ）
+    if (__lbHandleTermsDialog()) { termsSeenAt = 0; termsSeen = true; return; }
+    // 規約ダイアログを閉じても入力画面のまま（自動で進まない場合）→ 0.8秒後に「確認する」を1回だけ押し直す
+    if (termsSeen && !reconfirmed && !isConfirmPage()) {
+      if (!termsSeenAt) termsSeenAt = Date.now();
+      const again = Array.from(document.querySelectorAll('button')).find(b =>
+        b.textContent.trim() === '確認する' && !b.disabled);
+      if (again && Date.now() - termsSeenAt > 800) {
+        reconfirmed = true;
+        chrome.runtime.sendMessage({ action: 'debugLog', message: '利用規約ダイアログ後→確認するを再クリック' }).catch(() => {});
+        again.click();
+        return;
+      }
     }
     // 「申し込みをする」ボタンを探す
     const btn = Array.from(document.querySelectorAll('button')).find(b =>
@@ -3925,16 +4010,16 @@ function waitAndClickSubmit() {
       return;
     }
     if (hasTimeSlotError()) { clearInterval(watcher); handleTimeSlotError(); return; }
-    // 10回ごとにボタン一覧をログ
-    if (attempts % 10 === 0) {
+    // 1秒ごとにボタン一覧をログ
+    if (attempts % 20 === 0) {
       const allBtns = Array.from(document.querySelectorAll('button')).map(b => b.textContent.trim()).filter(t => t).join(' / ');
       chrome.runtime.sendMessage({ action: 'debugLog', message: `確認画面ボタン一覧(${attempts}回目): ${allBtns}` }).catch(() => {});
     }
-    if (attempts > 300) {
+    if (attempts > 600) { // 30秒待機
       clearInterval(watcher);
       chrome.runtime.sendMessage({ action: 'debugLog', message: '申し込みボタンタイムアウト(30秒)' }).catch(() => {});
     }
-  }, 100);
+  }, 50);
 }
 
 // 結果監視
