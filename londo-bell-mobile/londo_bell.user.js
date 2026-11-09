@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LONDO BELL Mobile
 // @namespace    londo-bell-mobile
-// @version      1.1.202610311429
-// @description  GUNDAM BASE 入店事前抽選 自動申込 (安定版 v1.1)  [BUILD 2026-10-31 14:29 JST]
+// @version      1.1.202611092145
+// @description  GUNDAM BASE 入店事前抽選 自動申込 (安定版 v1.1)  [BUILD 2026-11-09 21:45 JST]
 // @match        https://www.gundam-base-entry.net/*
 // @match        https://gundam-base-entry.net/*
 // @run-at       document-end
@@ -130,6 +130,7 @@
     { value: 'THE GUNDAM BASE SATELLITE NAGOYA',     label: 'SATELLITE NAGOYA' },
     { value: 'THE GUNDAM BASE SATELLITE SENDAI',     label: 'SATELLITE SENDAI' },
     { value: 'THE GUNDAM BASE SATELLITE KANAZAWA',   label: 'SATELLITE KANAZAWA' },
+    { value: 'THE GUNDAM BASE SHIBUYA',              label: 'THE GUNDAM BASE SHIBUYA' },
   ];
 
   const __LB_TIME_OPTIONS = [
@@ -525,6 +526,10 @@
       }
     } catch(e) { console.error('[LB] settings btn bind error:', e); }
 
+    // 店舗選択（希望時間の上）
+    try { initStorePicker(); }
+    catch(e) { console.error('[LB-STORE] init error:', e); }
+
     // rev16.1: 希望時間アコーディオン初期化（窓直結、最頻使用機能の動線短縮）
     try { initTimePrefsAccordion(); }
     catch(e) { console.error('[LB-TIME-ACC] init error:', e); }
@@ -582,6 +587,55 @@
       });
     }
     updateConfigWarning();
+  }
+
+  // ============================================================
+  // 店舗選択（窓の希望時間の上）
+  //   - 選択中の店舗を常に表示し、その場で変更できる
+  //   - 保存は localStorage の他項目を保持したまま storeName のみ上書き
+  //   - トップページではリロードして反映（起動時の自動選択でサイトの店舗も切り替わる）。
+  //     入力画面などでは店舗はサイト側で確定済みなので保存のみ
+  // ============================================================
+  function initStorePicker() {
+    const sel = document.getElementById('__lb_diag_store_sel');
+    if (!sel || sel.dataset.__lbBound === '1') return;
+    sel.dataset.__lbBound = '1';
+
+    const cur = (__LB_RUNTIME_CONFIG.storeName || '').trim();
+    const opts = __LB_STORE_OPTIONS.slice();
+    if (cur && !opts.some(function(o) { return o.value === cur; })) opts.push({ value: cur, label: cur });
+    let h = '';
+    for (let i = 0; i < opts.length; i++) {
+      // 窓の幅（220px固定）に収まるよう共通の接頭辞を省いて表示（例: SATELLITE HIROSHIMA → HIROSHIMA）
+      const label = opts[i].value.replace(/^THE GUNDAM BASE /, '').replace(/^SATELLITE /, '');
+      h += '<option value="' + opts[i].value + '">' + label + '</option>';
+    }
+    sel.innerHTML = h;
+    sel.value = cur;
+
+    sel.addEventListener('change', function() {
+      try {
+        const key = __LB_STORAGE_PREFIX + __LB_PREFS_STORAGE_KEY;
+        let prefs = {};
+        try {
+          const raw = localStorage.getItem(key);
+          if (raw) prefs = JSON.parse(raw) || {};
+        } catch(e) { /* 破損なら空から */ }
+        prefs.storeName = sel.value;
+        prefs._updated_at = Date.now();
+        localStorage.setItem(key, JSON.stringify(prefs));
+        const onTop = location.pathname === '/' || location.pathname === '';
+        if (onTop) {
+          __lbToast('✅ 店舗を変更しました。リロードします...', '#4cc982');
+          setTimeout(function() { try { location.reload(); } catch(e) {} }, 250);
+        } else {
+          __lbToast('✅ 店舗を保存しました（トップページで反映）', '#4cc982');
+        }
+      } catch(e) {
+        console.error('[LB-STORE] save error:', e);
+        __lbToast('❌ 保存失敗: ' + e.message, '#ff5c5c');
+      }
+    });
   }
 
   // ============================================================
@@ -702,6 +756,10 @@
   __lbCounterIntervalId = setInterval(updateCounter, 1000);
   // ※ コントロール行の表示は v18 のスプラッシュ完了後に行う（後段で ensureControlRow を呼ぶ）
 
+  // 起動演出は使わない（HIROさん要望）。セッション開始時点で「演出表示済み」にしておき、
+  // showStartupSplash / ensureDiagPanel とも既存の「演出スキップ（窓を即表示）」経路を通す
+  try { sessionStorage.setItem('lb_splash_shown_v1_1_1', '1'); } catch(e) {}
+
   // ============================================================
   // v1.1.1: 起動演出（morph transition 復活版・mockup_v18_green.html 完全準拠）
   // - 4.6秒のリッチ演出
@@ -737,6 +795,8 @@
       // 2回目以降：演出スキップ。診断パネルロゴは即表示状態にする
       window.__lb_splash_skip = true;
       window.__lb_splash_landed_immediate = true; // 診断パネル生成時に logo-landed を即付与
+      // 演出を出していないので、トーストの「演出中は抑制」を効かせない
+      window.__lb_splash_shown = false;
       console.log('[LB] スプラッシュスキップ（セッション継続中）');
       return;
     }
@@ -924,7 +984,7 @@
           <img class="__lb_splash_logo" src="${__LB_LOGO_URL}" alt="LONDO BELL">
           <div class="__lb_splash_title">LONDO BELL</div>
           <div class="__lb_splash_subtitle">MOBILE</div>
-          <div class="__lb_splash_version">v1.1.1.41144 · ANAHEIM ELECTRONICS</div>
+          <div class="__lb_splash_version">11/09 21:45版 · ANAHEIM ELECTRONICS</div>
           <div class="__lb_splash_status">
             <div class="__lb_splash_dot"></div>
             <div class="__lb_splash_status_text">SYSTEM READY</div>
@@ -1420,6 +1480,36 @@
             font-size: 9px;
             flex-shrink: 0;
           }
+          /* 店舗選択行（希望時間の上）。220px 幅は維持 */
+          .__lb_diag_store_row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding-top: 8px;
+            margin-top: 6px;
+            border-top: 1px solid rgba(76,201,130,0.2);
+          }
+          .__lb_diag_store_label {
+            color: #4cc982;
+            font-size: 13px;
+            font-weight: 600;
+            flex-shrink: 0;
+          }
+          .__lb_diag_store_select {
+            flex: 1;
+            min-width: 0;  /* width 220px 固定維持に必須 */
+            font-size: 13px;
+            font-weight: 600;
+            padding: 6px 8px;
+            background: rgba(255,255,255,0.06);
+            color: #fff;
+            border: 1px solid rgba(76,201,130,0.45);
+            border-radius: 5px;
+            -webkit-appearance: none;
+            appearance: none;
+            pointer-events: auto;
+            line-height: 1.3;
+          }
           /* rev16.1: 希望時間アコーディオン（窓直結、最頻使用機能の動線短縮） */
           /* rev16.2: タッチで選びやすいよう文字サイズ拡大。220px 幅は維持。 */
           .__lb_diag_time_accordion_header {
@@ -1534,7 +1624,7 @@
           <img class="__lb_diag_logo" src="${LOGO_URL}" alt="">
           <div class="__lb_diag_title_block">
             <div class="__lb_diag_name">LONDO BELL MOBILE</div>
-            <div class="__lb_diag_version">v1.1.1.41144</div>
+            <div class="__lb_diag_version">11/09 21:45版</div>
           </div>
         </div>
         <div class="__lb_diag_status_row">
@@ -1552,6 +1642,10 @@
         <div class="__lb_diag_control_row">
           <div id="__lb_counter">🔄 0回 / 0秒</div>
           <button id="__lb_stop_btn" type="button">⏹ 停止</button>
+        </div>
+        <div class="__lb_diag_store_row">
+          <span class="__lb_diag_store_label">店舗</span>
+          <select class="__lb_diag_store_select" id="__lb_diag_store_sel"></select>
         </div>
         <div class="__lb_diag_time_accordion_header" id="__lb_diag_time_acc_header">
           <span class="__lb_diag_time_acc_chevron" id="__lb_diag_time_acc_chevron">▼</span>
@@ -1643,6 +1737,166 @@
         }, 4000);
       }
     } catch(e) { console.error('[LB] ensureDiagPanel error:', e); }
+  }
+
+  // ============================================================
+  // 折りたたみ（ミニ表示）
+  // 統合UI (__lb_diag) がページの時間ボタン等と重なり手動操作の邪魔になるため、
+  // ヘッダー（ロゴ・タイトル）のタップで小さなカプセル (__lb_mini) に切り替える。
+  // - __lb_diag 本体（幅220px固定）は触らず、クラス __lb_collapsed で隠すだけ。
+  //   rev16.5 の bottom sheet が使う style.display とは別経路なので干渉しない
+  // - 停止/再開は __lb_stop_btn を click して既存ロジックに任せる（表示も本体から写す）
+  // - z-index は bottom sheet のオーバーレイより下（設定画面を覆わない）
+  // - 状態は lbDiagCollapsed に保存し、リロード後も維持
+  // ============================================================
+  function ensureMiniPanel() {
+    const diag = document.getElementById('__lb_diag');
+    if (!diag || document.getElementById('__lb_mini')) return;
+    try {
+      const st = document.createElement('style');
+      st.id = '__lb_mini_style';
+      st.textContent = `
+        #__lb_diag.__lb_collapsed { display: none !important; }
+        #__lb_diag .__lb_diag_header { pointer-events: auto; cursor: pointer; }
+        /* 「▼ 小さく」ボタンの分タイトル欄が狭いので、版表示は折り返さない（窓の高さを変えない） */
+        #__lb_diag .__lb_diag_version { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        /* 折りたたみ・展開ボタン（文字付きで押せることが分かる形に） */
+        .__lb_diag_collapse_btn,
+        #__lb_mini_open {
+          flex-shrink: 0;
+          background: rgba(76,201,130,0.15);
+          color: #4cc982;
+          border: 1px solid #4cc982;
+          border-radius: 12px;
+          padding: 4px 8px;
+          font: 700 10px -apple-system, sans-serif;
+          white-space: nowrap;
+          cursor: pointer;
+          -webkit-tap-highlight-color: transparent;
+          pointer-events: auto;
+        }
+        .__lb_diag_collapse_btn:active,
+        #__lb_mini_open:active {
+          background: #4cc982;
+          color: #060d1a;
+        }
+        #__lb_mini {
+          position: fixed;
+          bottom: calc(100px + env(safe-area-inset-bottom, 0px));
+          right: calc(16px + env(safe-area-inset-right, 0px));
+          z-index: 2147483639;
+          display: none;
+          align-items: center;
+          gap: 6px;
+          width: 184px;
+          height: 36px;
+          padding: 0 5px;
+          box-sizing: border-box;
+          background: rgba(14,27,50,0.92);
+          border: 1px solid rgba(76,201,130,0.4);
+          border-radius: 18px;
+          box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+          -webkit-backdrop-filter: blur(10px);
+          backdrop-filter: blur(10px);
+          cursor: pointer;
+          -webkit-tap-highlight-color: transparent;
+          /* サイトのプルダウンやダイアログ表示中は body が pointer-events:none になるため明示 */
+          pointer-events: auto;
+        }
+        #__lb_mini_count {
+          flex: 1;
+          min-width: 0;
+          color: #4cc982;
+          font: 600 10px 'SF Mono', Menlo, monospace;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        #__lb_mini_stop {
+          background: rgba(76,201,130,0.15);
+          color: #4cc982;
+          border: 1px solid #4cc982;
+          padding: 4px 8px;
+          border-radius: 12px;
+          font: 600 10px -apple-system, sans-serif;
+          cursor: pointer;
+          -webkit-tap-highlight-color: transparent;
+          flex-shrink: 0;
+        }
+        #__lb_mini_stop:active {
+          background: #4cc982;
+          color: #060d1a;
+        }
+      `;
+      document.head.appendChild(st);
+
+      const mini = document.createElement('div');
+      mini.id = '__lb_mini';
+      mini.innerHTML = `<button id="__lb_mini_open" type="button">▲ 開く</button><span id="__lb_mini_count"></span><button id="__lb_mini_stop" type="button"></button>`;
+      document.body.appendChild(mini);
+
+      // ヘッダー右端に「▼ 小さく」ボタン（ヘッダーの flex 子要素なのでタイトルは省略表示で縮む）。
+      // クリックはヘッダーのハンドラまで伝わって折りたたむ
+      const collapseBtn = document.createElement('button');
+      collapseBtn.type = 'button';
+      collapseBtn.className = '__lb_diag_collapse_btn';
+      collapseBtn.textContent = '▼ 小さく';
+      const headerEl = diag.querySelector('.__lb_diag_header');
+      if (headerEl) headerEl.appendChild(collapseBtn);
+
+      const miniCount = mini.querySelector('#__lb_mini_count');
+      const miniStop = mini.querySelector('#__lb_mini_stop');
+
+      // 本体のカウンタ・停止ボタンの表示をミニに写す
+      function syncMini() {
+        const c = document.getElementById('__lb_counter');
+        const s = document.getElementById('__lb_stop_btn');
+        if (!c || !s) return;
+        const ct = (c.textContent || '').split(' / ')[0];  // 「🔄 12回 / 3秒」→「🔄 12回」
+        if (miniCount.textContent !== ct) miniCount.textContent = ct;
+        miniCount.style.color = c.style.color || '';
+        const bt = (s.textContent || '').trim();
+        if (miniStop.textContent !== bt) miniStop.textContent = bt;
+        miniStop.style.background = s.style.background || '';
+        miniStop.style.color = s.style.color || '';
+        miniStop.style.borderColor = s.style.borderColor || '';
+      }
+
+      function setCollapsed(on) {
+        const d = document.getElementById('__lb_diag');
+        if (d) d.classList.toggle('__lb_collapsed', on);
+        if (on) syncMini();
+        mini.style.display = on ? 'flex' : 'none';
+        try { GM_setValue('lbDiagCollapsed', on); } catch(e) {}
+      }
+
+      miniStop.addEventListener('click', function(e) {
+        e.stopPropagation();  // カプセル本体の「開く」を発火させない
+        const s = document.getElementById('__lb_stop_btn');
+        if (s) s.click();
+        setTimeout(syncMini, 0);
+      });
+      mini.addEventListener('click', function() { setCollapsed(false); });
+      const header = diag.querySelector('.__lb_diag_header');
+      if (header) header.addEventListener('click', function() { setCollapsed(true); });
+      setInterval(syncMini, 500);
+
+      let saved = false;
+      try { saved = GM_getValue('lbDiagCollapsed', false) === true; } catch(e) {}
+      if (saved) {
+        if (diag.classList.contains('logo-landed')) {
+          // 演出なし（リロード時など）→ 本体が表示される前に折りたたむ（一瞬開いて見えるのを防ぐ）
+          setCollapsed(true);
+        } else {
+          // 初回演出中は本体のロゴが着地先になるので、着地を待ってから折りたたむ
+          const waitLanded = setInterval(function() {
+            if (!diag.classList.contains('logo-landed')) return;
+            clearInterval(waitLanded);
+            setTimeout(function() { setCollapsed(true); }, 800);
+          }, 100);
+        }
+      }
+    } catch(e) { console.error('[LB] ensureMiniPanel error:', e); }
   }
 
   // ============================================================
@@ -1960,8 +2214,8 @@
                 '※ 希望時間は画面右下窓「希望時間」アコーディオンから変更してください' +
               '</p>' +
             '</section>' +
-            // rev17: Discord 通知（任意）
-            '<section class="__lb_sheet_section">' +
+            // rev17: Discord 通知（任意）。未使用のため非表示（保存済みURLは保持される）
+            '<section class="__lb_sheet_section" style="display:none;">' +
               '<h3>📡 Discord 通知（任意）</h3>' +
               '<div class="__lb_sheet_row">' +
                 '<label>Webhook URL</label>' +
@@ -1973,7 +2227,8 @@
                 '<small>※ 入力した URL に「テスト通知」を 1 件送信します。保存前にも動作確認可能。</small>' +
               '</div>' +
             '</section>' +
-            '<section class="__lb_sheet_section">' +
+            // 抽選アラーム。未使用のため非表示
+            '<section class="__lb_sheet_section" style="display:none;">' +
               '<h3>⏰ 抽選アラーム（Apple Calendar 連携）</h3>' +
               '<div class="__lb_sheet_row">' +
                 '<label>抽選開始時刻</label>' +
@@ -2335,8 +2590,8 @@
     }
   }
   setInterval(updateDiagPanel, 1000);
-  if (document.body) { ensureDiagPanel(); updateDiagPanel(); ensureControlRow(); }
-  else document.addEventListener('DOMContentLoaded', function() { ensureDiagPanel(); updateDiagPanel(); ensureControlRow(); });
+  if (document.body) { ensureDiagPanel(); updateDiagPanel(); ensureControlRow(); ensureMiniPanel(); }
+  else document.addEventListener('DOMContentLoaded', function() { ensureDiagPanel(); updateDiagPanel(); ensureControlRow(); ensureMiniPanel(); });
 
   // フェーズ更新ヘルパー
   window.__lbSetPhase = function(phase) { __lbDiagPhase = phase; };
@@ -3247,11 +3502,12 @@ function startApiPolling() {
     'THE GUNDAM BASE SATELLITE KYOTO': '30SK',
     'THE GUNDAM BASE SATELLITE NAGOYA': '30SN',
     'THE GUNDAM BASE SATELLITE SENDAI': '30SS',
-    'THE GUNDAM BASE SATELLITE KANAZAWA': '30SZ'
+    'THE GUNDAM BASE SATELLITE KANAZAWA': '30SZ',
+    'THE GUNDAM BASE SHIBUYA': '40GS'
   };
 
   const targetStore = formData?.storeName || 'THE GUNDAM BASE TOKYO';
-  const targetId = storeNameToId[targetStore];
+  const targetId = storeNameToId[targetStore.trim()];
   let backoffTime = 1000;      // 通常は1秒
   let backoffActive = false;   // バックオフ中かどうか
 
@@ -3292,9 +3548,11 @@ function startApiPolling() {
       })
       .then(shops => {
         if (!shops) return;
+        // 対応表にない店舗は名前で照合。サイトの店舗名は末尾に空白が付くことがある
+        // （例: "THE GUNDAM BASE SHIBUYA "）ので前後の空白を無視する
         const shop = targetId
           ? shops.find(s => s.id === targetId)
-          : shops.find(s => s.name === targetStore);
+          : shops.find(s => (s.name || '').trim() === targetStore.trim());
 
         // web_ticket_flag だけでは発行ボタンが押せない（disabled のまま）ことがある。
         // 実際に押せるかは web_ticket_available で判定する（項目が無いAPIなら flag のみで判定）
@@ -4440,14 +4698,18 @@ function clickIssueBtn(btn) {
           let storeWait = 0;
           const waitStore = setInterval(function() {
             storeWait++;
+            // 店舗欄がプルダウンなら、表示中の店舗が設定と違っても待たずに監視へ進む
+            // （startMonitoring 内で設定の店舗を自動選択する。以前は5秒待ってから進んでいた）
             const storeBtn = Array.from(document.querySelectorAll('a, button')).find(function(el) {
               return (el.textContent || '').trim().includes(__LB_RUNTIME_CONFIG.storeName || '');
-            });
+            }) || document.querySelector('button[role="combobox"]');
             if (storeBtn) {
               clearInterval(waitStore);
               __lbToast('🏬 店舗選択: ' + __LB_RUNTIME_CONFIG.storeName);
               try { window.__lbSetPhase && window.__lbSetPhase('店舗クリック→監視開始'); } catch(e) {}
-              storeBtn.click();
+              // 店舗欄がプルダウン（選択済みの店舗名を表示中）の場合は押さない。
+              // 押すとプルダウンが開いたまま残り、ページ全体がタップを受け付けなくなる
+              if (storeBtn.getAttribute('role') !== 'combobox') storeBtn.click();
               // クリック後、startMonitoring を呼ぶ
               setTimeout(function() {
                 try {
