@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LONDO BELL Mobile β (localStorage版)
 // @namespace    londo-bell-mobile-beta
-// @version      1.2.202611092118-beta
-// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 21:18 JST]
+// @version      1.2.202611092126-beta
+// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 21:26 JST]
 // @match        https://www.gundam-base-entry.net/*
 // @match        https://gundam-base-entry.net/*
 // @run-at       document-end
@@ -130,6 +130,7 @@
     { value: 'THE GUNDAM BASE SATELLITE NAGOYA',     label: 'SATELLITE NAGOYA' },
     { value: 'THE GUNDAM BASE SATELLITE SENDAI',     label: 'SATELLITE SENDAI' },
     { value: 'THE GUNDAM BASE SATELLITE KANAZAWA',   label: 'SATELLITE KANAZAWA' },
+    { value: 'THE GUNDAM BASE SHIBUYA',              label: 'THE GUNDAM BASE SHIBUYA' },
   ];
 
   const __LB_TIME_OPTIONS = [
@@ -3424,11 +3425,12 @@ function startApiPolling() {
     'THE GUNDAM BASE SATELLITE KYOTO': '30SK',
     'THE GUNDAM BASE SATELLITE NAGOYA': '30SN',
     'THE GUNDAM BASE SATELLITE SENDAI': '30SS',
-    'THE GUNDAM BASE SATELLITE KANAZAWA': '30SZ'
+    'THE GUNDAM BASE SATELLITE KANAZAWA': '30SZ',
+    'THE GUNDAM BASE SHIBUYA': '40GS'
   };
 
   const targetStore = formData?.storeName || 'THE GUNDAM BASE TOKYO';
-  const targetId = storeNameToId[targetStore];
+  const targetId = storeNameToId[targetStore.trim()];
   let backoffTime = 1000;      // 通常は1秒
   let backoffActive = false;   // バックオフ中かどうか
 
@@ -3469,9 +3471,11 @@ function startApiPolling() {
       })
       .then(shops => {
         if (!shops) return;
+        // 対応表にない店舗は名前で照合。サイトの店舗名は末尾に空白が付くことがある
+        // （例: "THE GUNDAM BASE SHIBUYA "）ので前後の空白を無視する
         const shop = targetId
           ? shops.find(s => s.id === targetId)
-          : shops.find(s => s.name === targetStore);
+          : shops.find(s => (s.name || '').trim() === targetStore.trim());
 
         // web_ticket_flag だけでは発行ボタンが押せない（disabled のまま）ことがある。
         // 実際に押せるかは web_ticket_available で判定する（項目が無いAPIなら flag のみで判定）
@@ -4624,7 +4628,9 @@ function clickIssueBtn(btn) {
               clearInterval(waitStore);
               __lbToast('🏬 店舗選択: ' + __LB_RUNTIME_CONFIG.storeName);
               try { window.__lbSetPhase && window.__lbSetPhase('店舗クリック→監視開始'); } catch(e) {}
-              storeBtn.click();
+              // 店舗欄がプルダウン（選択済みの店舗名を表示中）の場合は押さない。
+              // 押すとプルダウンが開いたまま残り、ページ全体がタップを受け付けなくなる
+              if (storeBtn.getAttribute('role') !== 'combobox') storeBtn.click();
               // クリック後、startMonitoring を呼ぶ
               setTimeout(function() {
                 try {
