@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LONDO BELL Mobile β (localStorage版)
 // @namespace    londo-bell-mobile-beta
-// @version      1.2.202611092126-beta
-// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 21:26 JST]
+// @version      1.2.202611092137-beta
+// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 21:37 JST]
 // @match        https://www.gundam-base-entry.net/*
 // @match        https://gundam-base-entry.net/*
 // @run-at       document-end
@@ -526,6 +526,10 @@
       }
     } catch(e) { console.error('[LB] settings btn bind error:', e); }
 
+    // 店舗選択（希望時間の上）
+    try { initStorePicker(); }
+    catch(e) { console.error('[LB-STORE] init error:', e); }
+
     // rev16.1: 希望時間アコーディオン初期化（窓直結、最頻使用機能の動線短縮）
     try { initTimePrefsAccordion(); }
     catch(e) { console.error('[LB-TIME-ACC] init error:', e); }
@@ -583,6 +587,55 @@
       });
     }
     updateConfigWarning();
+  }
+
+  // ============================================================
+  // 店舗選択（窓の希望時間の上）
+  //   - 選択中の店舗を常に表示し、その場で変更できる
+  //   - 保存は localStorage の他項目を保持したまま storeName のみ上書き
+  //   - トップページではリロードして反映（起動時の自動選択でサイトの店舗も切り替わる）。
+  //     入力画面などでは店舗はサイト側で確定済みなので保存のみ
+  // ============================================================
+  function initStorePicker() {
+    const sel = document.getElementById('__lb_diag_store_sel');
+    if (!sel || sel.dataset.__lbBound === '1') return;
+    sel.dataset.__lbBound = '1';
+
+    const cur = (__LB_RUNTIME_CONFIG.storeName || '').trim();
+    const opts = __LB_STORE_OPTIONS.slice();
+    if (cur && !opts.some(function(o) { return o.value === cur; })) opts.push({ value: cur, label: cur });
+    let h = '';
+    for (let i = 0; i < opts.length; i++) {
+      // 窓の幅（220px固定）に収まるよう共通の接頭辞を省いて表示
+      const label = opts[i].value.replace(/^THE GUNDAM BASE /, '');
+      h += '<option value="' + opts[i].value + '">' + label + '</option>';
+    }
+    sel.innerHTML = h;
+    sel.value = cur;
+
+    sel.addEventListener('change', function() {
+      try {
+        const key = __LB_STORAGE_PREFIX + __LB_PREFS_STORAGE_KEY;
+        let prefs = {};
+        try {
+          const raw = localStorage.getItem(key);
+          if (raw) prefs = JSON.parse(raw) || {};
+        } catch(e) { /* 破損なら空から */ }
+        prefs.storeName = sel.value;
+        prefs._updated_at = Date.now();
+        localStorage.setItem(key, JSON.stringify(prefs));
+        const onTop = location.pathname === '/' || location.pathname === '';
+        if (onTop) {
+          __lbToast('✅ 店舗を変更しました。リロードします...', '#4cc982');
+          setTimeout(function() { try { location.reload(); } catch(e) {} }, 250);
+        } else {
+          __lbToast('✅ 店舗を保存しました（トップページで反映）', '#4cc982');
+        }
+      } catch(e) {
+        console.error('[LB-STORE] save error:', e);
+        __lbToast('❌ 保存失敗: ' + e.message, '#ff5c5c');
+      }
+    });
   }
 
   // ============================================================
@@ -1439,6 +1492,36 @@
             font-size: 9px;
             flex-shrink: 0;
           }
+          /* 店舗選択行（希望時間の上）。220px 幅は維持 */
+          .__lb_diag_store_row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding-top: 8px;
+            margin-top: 6px;
+            border-top: 1px solid rgba(232,183,76,0.2);
+          }
+          .__lb_diag_store_label {
+            color: #E8B74C;
+            font-size: 13px;
+            font-weight: 600;
+            flex-shrink: 0;
+          }
+          .__lb_diag_store_select {
+            flex: 1;
+            min-width: 0;  /* width 220px 固定維持に必須 */
+            font-size: 13px;
+            font-weight: 600;
+            padding: 6px 8px;
+            background: rgba(255,255,255,0.06);
+            color: #fff;
+            border: 1px solid rgba(232,183,76,0.45);
+            border-radius: 5px;
+            -webkit-appearance: none;
+            appearance: none;
+            pointer-events: auto;
+            line-height: 1.3;
+          }
           /* rev16.1: 希望時間アコーディオン（窓直結、最頻使用機能の動線短縮） */
           /* rev16.2: タッチで選びやすいよう文字サイズ拡大。220px 幅は維持。 */
           .__lb_diag_time_accordion_header {
@@ -1583,6 +1666,10 @@
         <div class="__lb_diag_control_row">
           <div id="__lb_counter">🔄 0回 / 0秒</div>
           <button id="__lb_stop_btn" type="button">⏹ 停止</button>
+        </div>
+        <div class="__lb_diag_store_row">
+          <span class="__lb_diag_store_label">店舗</span>
+          <select class="__lb_diag_store_select" id="__lb_diag_store_sel"></select>
         </div>
         <div class="__lb_diag_time_accordion_header" id="__lb_diag_time_acc_header">
           <span class="__lb_diag_time_acc_chevron" id="__lb_diag_time_acc_chevron">▼</span>
@@ -2139,8 +2226,8 @@
                 '※ 希望時間は画面右下窓「希望時間」アコーディオンから変更してください' +
               '</p>' +
             '</section>' +
-            // rev17: Discord 通知（任意）
-            '<section class="__lb_sheet_section">' +
+            // rev17: Discord 通知（任意）。未使用のため非表示（保存済みURLは保持される）
+            '<section class="__lb_sheet_section" style="display:none;">' +
               '<h3>📡 Discord 通知（任意）</h3>' +
               '<div class="__lb_sheet_row">' +
                 '<label>Webhook URL</label>' +
@@ -2152,7 +2239,8 @@
                 '<small>※ 入力した URL に「テスト通知」を 1 件送信します。保存前にも動作確認可能。</small>' +
               '</div>' +
             '</section>' +
-            '<section class="__lb_sheet_section">' +
+            // 抽選アラーム。未使用のため非表示
+            '<section class="__lb_sheet_section" style="display:none;">' +
               '<h3>⏰ 抽選アラーム（Apple Calendar 連携）</h3>' +
               '<div class="__lb_sheet_row">' +
                 '<label>抽選開始時刻</label>' +
@@ -4621,9 +4709,11 @@ function clickIssueBtn(btn) {
           let storeWait = 0;
           const waitStore = setInterval(function() {
             storeWait++;
+            // 店舗欄がプルダウンなら、表示中の店舗が設定と違っても待たずに監視へ進む
+            // （startMonitoring 内で設定の店舗を自動選択する。以前は5秒待ってから進んでいた）
             const storeBtn = Array.from(document.querySelectorAll('a, button')).find(function(el) {
               return (el.textContent || '').trim().includes(__LB_RUNTIME_CONFIG.storeName || '');
-            });
+            }) || document.querySelector('button[role="combobox"]');
             if (storeBtn) {
               clearInterval(waitStore);
               __lbToast('🏬 店舗選択: ' + __LB_RUNTIME_CONFIG.storeName);
