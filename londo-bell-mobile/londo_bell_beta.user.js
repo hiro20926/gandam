@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LONDO BELL Mobile β (localStorage版)
 // @namespace    londo-bell-mobile-beta
-// @version      1.2.202611092116-beta
-// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 21:16 JST]
+// @version      1.2.202611092118-beta
+// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 21:18 JST]
 // @match        https://www.gundam-base-entry.net/*
 // @match        https://gundam-base-entry.net/*
 // @run-at       document-end
@@ -1723,6 +1723,8 @@
           backdrop-filter: blur(10px);
           cursor: pointer;
           -webkit-tap-highlight-color: transparent;
+          /* サイトのプルダウンやダイアログ表示中は body が pointer-events:none になるため明示 */
+          pointer-events: auto;
         }
         #__lb_mini img {
           width: 26px;
