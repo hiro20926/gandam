@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LONDO BELL Mobile β (localStorage版)
 // @namespace    londo-bell-mobile-beta
-// @version      1.2.202611092151-beta
-// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 21:51 JST]
+// @version      1.2.202611092152-beta
+// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 21:52 JST]
 // @match        https://www.gundam-base-entry.net/*
 // @match        https://gundam-base-entry.net/*
 // @run-at       document-end
@@ -1004,7 +1004,7 @@
           <img class="__lb_splash_logo" src="${__LB_LOGO_URL}" alt="LONDO BELL">
           <div class="__lb_splash_title">LONDO BELL</div>
           <div class="__lb_splash_subtitle">MOBILE <span class="__lb_greek_beta">β</span></div>
-          <div class="__lb_splash_version">11/09 21:51版 · ANAHEIM ELECTRONICS</div>
+          <div class="__lb_splash_version">11/09 21:52版 · ANAHEIM ELECTRONICS</div>
           <div class="__lb_splash_status">
             <div class="__lb_splash_dot"></div>
             <div class="__lb_splash_status_text">SYSTEM READY</div>
@@ -1654,7 +1654,7 @@
           <img class="__lb_diag_logo" src="${LOGO_URL}" alt="">
           <div class="__lb_diag_title_block">
             <div class="__lb_diag_name">LONDO BELL MOBILE <span class="__lb_greek_beta">β</span></div>
-            <div class="__lb_diag_version">11/09 21:51版</div>
+            <div class="__lb_diag_version">11/09 21:52版</div>
           </div>
         </div>
         <div class="__lb_diag_status_row">
@@ -1788,6 +1788,9 @@
       st.textContent = `
         #__lb_diag.__lb_collapsed { display: none !important; }
         #__lb_diag .__lb_diag_header { pointer-events: auto; cursor: pointer; }
+        /* アプリ名（β タグ込み）が 220px 窓に余裕をもって収まるよう、字間とロゴとの間隔を少し詰める */
+        #__lb_diag .__lb_diag_header { gap: 8px; }
+        #__lb_diag .__lb_diag_name { letter-spacing: 0; }
         /* 2行目 = 版表示 + 「▼ 小さく」。1行目のアプリ名は幅いっぱいに使えるようにする */
         .__lb_diag_ver_row {
           display: flex;
