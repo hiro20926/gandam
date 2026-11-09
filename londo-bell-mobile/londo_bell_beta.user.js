@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LONDO BELL Mobile β (localStorage版)
 // @namespace    londo-bell-mobile-beta
-// @version      1.2.202611092137-beta
-// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 21:37 JST]
+// @version      1.2.202611092139-beta
+// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 21:39 JST]
 // @match        https://www.gundam-base-entry.net/*
 // @match        https://gundam-base-entry.net/*
 // @run-at       document-end
@@ -1782,14 +1782,25 @@
       st.textContent = `
         #__lb_diag.__lb_collapsed { display: none !important; }
         #__lb_diag .__lb_diag_header { pointer-events: auto; cursor: pointer; }
-        .__lb_diag_collapse_hint {
-          position: absolute;
-          top: 24px;
-          right: 12px;
-          color: rgba(232,183,76,0.7);
-          font: 700 13px -apple-system, sans-serif;
-          line-height: 1;
-          pointer-events: none;
+        /* 折りたたみ・展開ボタン（文字付きで押せることが分かる形に） */
+        .__lb_diag_collapse_btn,
+        #__lb_mini_open {
+          flex-shrink: 0;
+          background: rgba(232,183,76,0.15);
+          color: #E8B74C;
+          border: 1px solid #E8B74C;
+          border-radius: 12px;
+          padding: 4px 8px;
+          font: 700 10px -apple-system, sans-serif;
+          white-space: nowrap;
+          cursor: pointer;
+          -webkit-tap-highlight-color: transparent;
+          pointer-events: auto;
+        }
+        .__lb_diag_collapse_btn:active,
+        #__lb_mini_open:active {
+          background: #E8B74C;
+          color: #060d1a;
         }
         #__lb_mini {
           position: fixed;
@@ -1799,7 +1810,7 @@
           display: none;
           align-items: center;
           gap: 6px;
-          width: 156px;
+          width: 184px;
           height: 36px;
           padding: 0 5px;
           box-sizing: border-box;
@@ -1813,11 +1824,6 @@
           -webkit-tap-highlight-color: transparent;
           /* サイトのプルダウンやダイアログ表示中は body が pointer-events:none になるため明示 */
           pointer-events: auto;
-        }
-        #__lb_mini img {
-          width: 26px;
-          height: 26px;
-          flex-shrink: 0;
         }
         #__lb_mini_count {
           flex: 1;
@@ -1848,13 +1854,17 @@
 
       const mini = document.createElement('div');
       mini.id = '__lb_mini';
-      mini.innerHTML = `<img src="${__LB_LOGO_URL}" alt=""><span id="__lb_mini_count"></span><button id="__lb_mini_stop" type="button"></button>`;
+      mini.innerHTML = `<button id="__lb_mini_open" type="button">▲ 開く</button><span id="__lb_mini_count"></span><button id="__lb_mini_stop" type="button"></button>`;
       document.body.appendChild(mini);
 
-      const hint = document.createElement('span');
-      hint.className = '__lb_diag_collapse_hint';
-      hint.textContent = '－';
-      diag.appendChild(hint);
+      // ヘッダー右端に「▼ 小さく」ボタン（ヘッダーの flex 子要素なのでタイトルは省略表示で縮む）。
+      // クリックはヘッダーのハンドラまで伝わって折りたたむ
+      const collapseBtn = document.createElement('button');
+      collapseBtn.type = 'button';
+      collapseBtn.className = '__lb_diag_collapse_btn';
+      collapseBtn.textContent = '▼ 小さく';
+      const headerEl = diag.querySelector('.__lb_diag_header');
+      if (headerEl) headerEl.appendChild(collapseBtn);
 
       const miniCount = mini.querySelector('#__lb_mini_count');
       const miniStop = mini.querySelector('#__lb_mini_stop');
