@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LONDO BELL Mobile β (localStorage版)
 // @namespace    londo-bell-mobile-beta
-// @version      1.2.202610311429-beta
-// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-10-31 14:29 JST]
+// @version      1.2.202611092116-beta
+// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 21:16 JST]
 // @match        https://www.gundam-base-entry.net/*
 // @match        https://gundam-base-entry.net/*
 // @run-at       document-end
@@ -1676,6 +1676,152 @@
   }
 
   // ============================================================
+  // 折りたたみ（ミニ表示）
+  // 統合UI (__lb_diag) がページの時間ボタン等と重なり手動操作の邪魔になるため、
+  // ヘッダー（ロゴ・タイトル）のタップで小さなカプセル (__lb_mini) に切り替える。
+  // - __lb_diag 本体（幅220px固定）は触らず、クラス __lb_collapsed で隠すだけ。
+  //   rev16.5 の bottom sheet が使う style.display とは別経路なので干渉しない
+  // - 停止/再開は __lb_stop_btn を click して既存ロジックに任せる（表示も本体から写す）
+  // - z-index は bottom sheet のオーバーレイより下（設定画面を覆わない）
+  // - 状態は lbDiagCollapsed に保存し、リロード後も維持
+  // ============================================================
+  function ensureMiniPanel() {
+    const diag = document.getElementById('__lb_diag');
+    if (!diag || document.getElementById('__lb_mini')) return;
+    try {
+      const st = document.createElement('style');
+      st.id = '__lb_mini_style';
+      st.textContent = `
+        #__lb_diag.__lb_collapsed { display: none !important; }
+        #__lb_diag .__lb_diag_header { pointer-events: auto; cursor: pointer; }
+        .__lb_diag_collapse_hint {
+          position: absolute;
+          top: 24px;
+          right: 12px;
+          color: rgba(232,183,76,0.7);
+          font: 700 13px -apple-system, sans-serif;
+          line-height: 1;
+          pointer-events: none;
+        }
+        #__lb_mini {
+          position: fixed;
+          bottom: calc(100px + env(safe-area-inset-bottom, 0px));
+          right: calc(16px + env(safe-area-inset-right, 0px));
+          z-index: 2147483639;
+          display: none;
+          align-items: center;
+          gap: 6px;
+          width: 156px;
+          height: 36px;
+          padding: 0 5px;
+          box-sizing: border-box;
+          background: rgba(14,27,50,0.92);
+          border: 1px solid rgba(232,183,76,0.4);
+          border-radius: 18px;
+          box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+          -webkit-backdrop-filter: blur(10px);
+          backdrop-filter: blur(10px);
+          cursor: pointer;
+          -webkit-tap-highlight-color: transparent;
+        }
+        #__lb_mini img {
+          width: 26px;
+          height: 26px;
+          flex-shrink: 0;
+        }
+        #__lb_mini_count {
+          flex: 1;
+          min-width: 0;
+          color: #E8B74C;
+          font: 600 10px 'SF Mono', Menlo, monospace;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        #__lb_mini_stop {
+          background: rgba(232,183,76,0.15);
+          color: #E8B74C;
+          border: 1px solid #E8B74C;
+          padding: 4px 8px;
+          border-radius: 12px;
+          font: 600 10px -apple-system, sans-serif;
+          cursor: pointer;
+          -webkit-tap-highlight-color: transparent;
+          flex-shrink: 0;
+        }
+        #__lb_mini_stop:active {
+          background: #E8B74C;
+          color: #060d1a;
+        }
+      `;
+      document.head.appendChild(st);
+
+      const mini = document.createElement('div');
+      mini.id = '__lb_mini';
+      mini.innerHTML = `<img src="${__LB_LOGO_URL}" alt=""><span id="__lb_mini_count"></span><button id="__lb_mini_stop" type="button"></button>`;
+      document.body.appendChild(mini);
+
+      const hint = document.createElement('span');
+      hint.className = '__lb_diag_collapse_hint';
+      hint.textContent = '－';
+      diag.appendChild(hint);
+
+      const miniCount = mini.querySelector('#__lb_mini_count');
+      const miniStop = mini.querySelector('#__lb_mini_stop');
+
+      // 本体のカウンタ・停止ボタンの表示をミニに写す
+      function syncMini() {
+        const c = document.getElementById('__lb_counter');
+        const s = document.getElementById('__lb_stop_btn');
+        if (!c || !s) return;
+        const ct = (c.textContent || '').split(' / ')[0];  // 「🔄 12回 / 3秒」→「🔄 12回」
+        if (miniCount.textContent !== ct) miniCount.textContent = ct;
+        miniCount.style.color = c.style.color || '';
+        const bt = (s.textContent || '').trim();
+        if (miniStop.textContent !== bt) miniStop.textContent = bt;
+        miniStop.style.background = s.style.background || '';
+        miniStop.style.color = s.style.color || '';
+        miniStop.style.borderColor = s.style.borderColor || '';
+      }
+
+      function setCollapsed(on) {
+        const d = document.getElementById('__lb_diag');
+        if (d) d.classList.toggle('__lb_collapsed', on);
+        if (on) syncMini();
+        mini.style.display = on ? 'flex' : 'none';
+        try { GM_setValue('lbDiagCollapsed', on); } catch(e) {}
+      }
+
+      miniStop.addEventListener('click', function(e) {
+        e.stopPropagation();  // カプセル本体の「開く」を発火させない
+        const s = document.getElementById('__lb_stop_btn');
+        if (s) s.click();
+        setTimeout(syncMini, 0);
+      });
+      mini.addEventListener('click', function() { setCollapsed(false); });
+      const header = diag.querySelector('.__lb_diag_header');
+      if (header) header.addEventListener('click', function() { setCollapsed(true); });
+      setInterval(syncMini, 500);
+
+      let saved = false;
+      try { saved = GM_getValue('lbDiagCollapsed', false) === true; } catch(e) {}
+      if (saved) {
+        if (diag.classList.contains('logo-landed')) {
+          // 演出なし（リロード時など）→ 本体が表示される前に折りたたむ（一瞬開いて見えるのを防ぐ）
+          setCollapsed(true);
+        } else {
+          // 初回演出中は本体のロゴが着地先になるので、着地を待ってから折りたたむ
+          const waitLanded = setInterval(function() {
+            if (!diag.classList.contains('logo-landed')) return;
+            clearInterval(waitLanded);
+            setTimeout(function() { setCollapsed(true); }, 800);
+          }, 100);
+        }
+      }
+    } catch(e) { console.error('[LB] ensureMiniPanel error:', e); }
+  }
+
+  // ============================================================
   // rev16: 設定変更 bottom sheet モーダル
   // ----------
   // 重要: rev11 で削除した画面中央モーダル (__lb_stopped_overlay) と性質が違う：
@@ -2365,8 +2511,8 @@
     }
   }
   setInterval(updateDiagPanel, 1000);
-  if (document.body) { ensureDiagPanel(); updateDiagPanel(); ensureControlRow(); }
-  else document.addEventListener('DOMContentLoaded', function() { ensureDiagPanel(); updateDiagPanel(); ensureControlRow(); });
+  if (document.body) { ensureDiagPanel(); updateDiagPanel(); ensureControlRow(); ensureMiniPanel(); }
+  else document.addEventListener('DOMContentLoaded', function() { ensureDiagPanel(); updateDiagPanel(); ensureControlRow(); ensureMiniPanel(); });
 
   // フェーズ更新ヘルパー
   window.__lbSetPhase = function(phase) { __lbDiagPhase = phase; };
