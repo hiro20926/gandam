@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LONDO BELL Mobile β (localStorage版)
 // @namespace    londo-bell-mobile-beta
-// @version      1.2.202611092243-beta
-// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 22:43 JST]
+// @version      1.2.202611092247-beta
+// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 22:47 JST]
 // @match        https://www.gundam-base-entry.net/*
 // @match        https://gundam-base-entry.net/*
 // @run-at       document-end
@@ -639,50 +639,6 @@
   }
 
   // ============================================================
-  // 店舗・日付ごとの時間枠をサイトの API から取得（希望時間の選択肢用）
-  //   - /api/tenpo で店舗IDを引き、/api/selectable/web_ticket で枠一覧を取る（ログイン不要）
-  //   - 取得できた枠は sessionStorage にキャッシュ（トップで1秒ごとにリロードしても再取得しない）
-  //   - 空の結果はキャッシュしない（あとで公開されることがあるため）
-  //   - 失敗時は何もしない（呼び出し側は全時間帯のまま）
-  // ============================================================
-  function __lbLoadStoreTimeSlots(cb) {
-    const store = (__LB_RUNTIME_CONFIG.storeName || '').trim();
-    if (!store) return;
-    let d = new Date();
-    if (__LB_RUNTIME_CONFIG.preferredDate) {
-      const pd = new Date(__LB_RUNTIME_CONFIG.preferredDate + 'T00:00:00');
-      if (!isNaN(pd.getTime())) d = pd;
-    }
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    const ds = d.getFullYear() + '/' + mm + '/' + dd;
-    const dateLabel = mm + '/' + dd;
-    const cacheKey = '__lb_slots_' + store + '_' + ds;
-    try {
-      const cached = sessionStorage.getItem(cacheKey);
-      if (cached) { cb(JSON.parse(cached), dateLabel); return; }
-    } catch(e) {}
-    fetch('/api/tenpo')
-      .then(function(r) { return r.ok ? r.json() : null; })
-      .then(function(shops) {
-        const shop = Array.isArray(shops) && shops.find(function(s) { return (s.name || '').trim() === store; });
-        if (!shop) return null;
-        return fetch('/api/selectable/web_ticket?tenpo_id=' + encodeURIComponent(shop.id) +
-                     '&lang=ja&date=' + encodeURIComponent(ds) + '&mousikomi_kubun=2')
-          .then(function(r) { return r.ok ? r.json() : null; });
-      })
-      .then(function(list) {
-        if (!Array.isArray(list)) return;
-        const slots = list.map(function(x) { return ((x && x.meishou) || '').trim(); }).filter(Boolean);
-        if (slots.length) {
-          try { sessionStorage.setItem(cacheKey, JSON.stringify(slots)); } catch(e) {}
-        }
-        cb(slots, dateLabel);
-      })
-      .catch(function(e) { console.log('[LB-TIME-ACC] 時間枠の取得失敗（全時間帯のまま）:', e && e.message); });
-  }
-
-  // ============================================================
   // rev16.1: 希望時間アコーディオン
   //   - 右下窓に直結（bottom sheet を開かずに第1〜第5希望を変更可能）
   //   - 保存は localStorage の他項目を保持したまま preferredTime1〜5 のみ上書き
@@ -700,17 +656,12 @@
     header.dataset.__lbBound = '1';
 
     // ドロップダウン選択肢を充填（auto / none + 22 枠）
-    function buildOptionsHtml(firstAuto, timeList, keepValue) {
-      const list = timeList || __LB_TIME_OPTIONS;
+    function buildOptionsHtml(firstAuto) {
       let h = '';
       if (firstAuto) h += '<option value="auto">🔄 最初の空き時間</option>';
       h += '<option value="none">指定なし（スキップ）</option>';
-      for (let i = 0; i < list.length; i++) {
-        h += '<option value="' + list[i] + '">' + list[i] + '</option>';
-      }
-      // 保存済みの希望が今回の枠に無い場合も消さずに残し、枠が無いことを示す
-      if (keepValue && keepValue !== 'auto' && keepValue !== 'none' && list.indexOf(keepValue) < 0) {
-        h += '<option value="' + keepValue + '">' + keepValue + '（この日は枠なし）</option>';
+      for (let i = 0; i < __LB_TIME_OPTIONS.length; i++) {
+        h += '<option value="' + __LB_TIME_OPTIONS[i] + '">' + __LB_TIME_OPTIONS[i] + '</option>';
       }
       return h;
     }
@@ -722,30 +673,6 @@
       const cur = __LB_RUNTIME_CONFIG['preferredTime' + i];
       sel.value = cur || (i === 1 ? 'auto' : 'none');
     }
-
-    // 選択肢を、選択中の店舗・希望日（未設定なら今日）の実際の時間枠に絞る。
-    // 枠は店舗だけでなく日によっても変わる（例: 東京は 11:00〜 の日と 10:00〜 の日がある）。
-    // 枠を取得できない日（未公開・休みなど）は全時間帯のまま
-    __lbLoadStoreTimeSlots(function(slots, dateLabel) {
-      if (!slots || !slots.length) return;
-      for (let i = 1; i <= 5; i++) {
-        const sel = document.getElementById('__lb_diag_time_acc_sel' + i);
-        if (!sel) continue;
-        const cur = sel.value;  // 保存前に選び直していた値も保つ
-        sel.innerHTML = buildOptionsHtml(true, slots, cur);
-        sel.value = cur;
-      }
-      let note = document.getElementById('__lb_diag_time_acc_note');
-      if (!note) {
-        note = document.createElement('div');
-        note.id = '__lb_diag_time_acc_note';
-        note.className = '__lb_diag_time_acc_note';
-        body.insertBefore(note, body.firstChild);
-      }
-      const storeLabel = (__LB_RUNTIME_CONFIG.storeName || '').trim()
-        .replace(/^THE GUNDAM BASE /, '').replace(/^SATELLITE /, '');
-      note.textContent = storeLabel + ' ' + dateLabel + ' の枠（' + slots.length + '）';
-    });
 
     // 開閉トグル
     header.addEventListener('click', function() {
@@ -1077,7 +1004,7 @@
           <img class="__lb_splash_logo" src="${__LB_LOGO_URL}" alt="LONDO BELL">
           <div class="__lb_splash_title">LONDO BELL</div>
           <div class="__lb_splash_subtitle">MOBILE <span class="__lb_greek_beta">β</span></div>
-          <div class="__lb_splash_version">11/09 22:43版 · ANAHEIM ELECTRONICS</div>
+          <div class="__lb_splash_version">11/09 22:47版 · ANAHEIM ELECTRONICS</div>
           <div class="__lb_splash_status">
             <div class="__lb_splash_dot"></div>
             <div class="__lb_splash_status_text">SYSTEM READY</div>
@@ -1727,7 +1654,7 @@
           <img class="__lb_diag_logo" src="${LOGO_URL}" alt="">
           <div class="__lb_diag_title_block">
             <div class="__lb_diag_name">LONDO BELL MOBILE <span class="__lb_greek_beta">β</span></div>
-            <div class="__lb_diag_version">11/09 22:43版</div>
+            <div class="__lb_diag_version">11/09 22:47版</div>
           </div>
         </div>
         <div class="__lb_diag_status_row">
@@ -1861,14 +1788,6 @@
       st.textContent = `
         #__lb_diag.__lb_collapsed { display: none !important; }
         #__lb_diag .__lb_diag_header { pointer-events: auto; cursor: pointer; }
-        /* 希望時間の選択肢がどの店舗・日の枠かを示す注記（アコーディオンを開いたときだけ見える） */
-        .__lb_diag_time_acc_note {
-          color: rgba(127,165,212,0.85);
-          font-size: 10px;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
         /* アプリ名（β タグ込み）が 220px 窓に余裕をもって収まるよう、字間とロゴとの間隔を少し詰める */
         #__lb_diag .__lb_diag_header { gap: 8px; }
         #__lb_diag .__lb_diag_name { letter-spacing: 0; }
