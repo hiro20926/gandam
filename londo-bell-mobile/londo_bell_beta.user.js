@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LONDO BELL Mobile β (localStorage版)
 // @namespace    londo-bell-mobile-beta
-// @version      1.2.202611092141-beta
-// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 21:41 JST]
+// @version      1.2.202611092145-beta
+// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 21:45 JST]
 // @match        https://www.gundam-base-entry.net/*
 // @match        https://gundam-base-entry.net/*
 // @run-at       document-end
@@ -756,6 +756,10 @@
   __lbCounterIntervalId = setInterval(updateCounter, 1000);
   // ※ コントロール行の表示は v18 のスプラッシュ完了後に行う（後段で ensureControlRow を呼ぶ）
 
+  // 起動演出は使わない（HIROさん要望）。セッション開始時点で「演出表示済み」にしておき、
+  // showStartupSplash / ensureDiagPanel とも既存の「演出スキップ（窓を即表示）」経路を通す
+  try { sessionStorage.setItem('lb_splash_shown_v1_2_beta', '1'); } catch(e) {}
+
   // ============================================================
   // v1.2-beta: 起動演出（morph transition 復活版・mockup_v18_orange.html 完全準拠）
   // - 4.6秒のリッチ演出
@@ -791,6 +795,8 @@
       // 2回目以降：演出スキップ。診断パネルロゴは即表示状態にする
       window.__lb_splash_skip = true;
       window.__lb_splash_landed_immediate = true; // 診断パネル生成時に logo-landed を即付与
+      // 演出を出していないので、トーストの「演出中は抑制」を効かせない
+      window.__lb_splash_shown = false;
       console.log('[LB] スプラッシュスキップ（セッション継続中）');
       return;
     }
@@ -998,7 +1004,7 @@
           <img class="__lb_splash_logo" src="${__LB_LOGO_URL}" alt="LONDO BELL">
           <div class="__lb_splash_title">LONDO BELL</div>
           <div class="__lb_splash_subtitle">MOBILE <span class="__lb_greek_beta">β</span></div>
-          <div class="__lb_splash_version">v1.2.41144-beta · ANAHEIM ELECTRONICS</div>
+          <div class="__lb_splash_version">11/09 21:45版 · ANAHEIM ELECTRONICS</div>
           <div class="__lb_splash_status">
             <div class="__lb_splash_dot"></div>
             <div class="__lb_splash_status_text">SYSTEM READY</div>
@@ -1648,7 +1654,7 @@
           <img class="__lb_diag_logo" src="${LOGO_URL}" alt="">
           <div class="__lb_diag_title_block">
             <div class="__lb_diag_name">LONDO BELL MOBILE <span class="__lb_greek_beta">β</span></div>
-            <div class="__lb_diag_version">v1.2.41144-beta</div>
+            <div class="__lb_diag_version">11/09 21:45版</div>
           </div>
         </div>
         <div class="__lb_diag_status_row">
@@ -1782,6 +1788,8 @@
       st.textContent = `
         #__lb_diag.__lb_collapsed { display: none !important; }
         #__lb_diag .__lb_diag_header { pointer-events: auto; cursor: pointer; }
+        /* 「▼ 小さく」ボタンの分タイトル欄が狭いので、版表示は折り返さない（窓の高さを変えない） */
+        #__lb_diag .__lb_diag_version { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         /* 折りたたみ・展開ボタン（文字付きで押せることが分かる形に） */
         .__lb_diag_collapse_btn,
         #__lb_mini_open {
