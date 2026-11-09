@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LONDO BELL Mobile β (localStorage版)
 // @namespace    londo-bell-mobile-beta
-// @version      1.2.202611092139-beta
-// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 21:39 JST]
+// @version      1.2.202611092141-beta
+// @description  GUNDAM BASE 入店事前抽選 自動申込 (ベータ版 v1.2-beta)  [BUILD 2026-11-09 21:41 JST]
 // @match        https://www.gundam-base-entry.net/*
 // @match        https://gundam-base-entry.net/*
 // @run-at       document-end
@@ -606,8 +606,8 @@
     if (cur && !opts.some(function(o) { return o.value === cur; })) opts.push({ value: cur, label: cur });
     let h = '';
     for (let i = 0; i < opts.length; i++) {
-      // 窓の幅（220px固定）に収まるよう共通の接頭辞を省いて表示
-      const label = opts[i].value.replace(/^THE GUNDAM BASE /, '');
+      // 窓の幅（220px固定）に収まるよう共通の接頭辞を省いて表示（例: SATELLITE HIROSHIMA → HIROSHIMA）
+      const label = opts[i].value.replace(/^THE GUNDAM BASE /, '').replace(/^SATELLITE /, '');
       h += '<option value="' + opts[i].value + '">' + label + '</option>';
     }
     sel.innerHTML = h;
