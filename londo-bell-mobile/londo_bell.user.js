@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LONDO BELL Mobile
 // @namespace    londo-bell-mobile
-// @version      1.1.202611092145
-// @description  GUNDAM BASE 入店事前抽選 自動申込 (安定版 v1.1)  [BUILD 2026-11-09 21:45 JST]
+// @version      1.1.202611092152
+// @description  GUNDAM BASE 入店事前抽選 自動申込 (安定版 v1.1)  [BUILD 2026-11-09 21:52 JST]
 // @match        https://www.gundam-base-entry.net/*
 // @match        https://gundam-base-entry.net/*
 // @run-at       document-end
@@ -984,7 +984,7 @@
           <img class="__lb_splash_logo" src="${__LB_LOGO_URL}" alt="LONDO BELL">
           <div class="__lb_splash_title">LONDO BELL</div>
           <div class="__lb_splash_subtitle">MOBILE</div>
-          <div class="__lb_splash_version">11/09 21:45版 · ANAHEIM ELECTRONICS</div>
+          <div class="__lb_splash_version">11/09 21:52版 · ANAHEIM ELECTRONICS</div>
           <div class="__lb_splash_status">
             <div class="__lb_splash_dot"></div>
             <div class="__lb_splash_status_text">SYSTEM READY</div>
@@ -1624,7 +1624,7 @@
           <img class="__lb_diag_logo" src="${LOGO_URL}" alt="">
           <div class="__lb_diag_title_block">
             <div class="__lb_diag_name">LONDO BELL MOBILE</div>
-            <div class="__lb_diag_version">11/09 21:45版</div>
+            <div class="__lb_diag_version">11/09 21:52版</div>
           </div>
         </div>
         <div class="__lb_diag_status_row">
@@ -1758,9 +1758,29 @@
       st.textContent = `
         #__lb_diag.__lb_collapsed { display: none !important; }
         #__lb_diag .__lb_diag_header { pointer-events: auto; cursor: pointer; }
-        /* 「▼ 小さく」ボタンの分タイトル欄が狭いので、版表示は折り返さない（窓の高さを変えない） */
-        #__lb_diag .__lb_diag_version { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        /* アプリ名（β タグ込み）が 220px 窓に余裕をもって収まるよう、字間とロゴとの間隔を少し詰める */
+        #__lb_diag .__lb_diag_header { gap: 8px; }
+        #__lb_diag .__lb_diag_name { letter-spacing: 0; }
+        /* 2行目 = 版表示 + 「▼ 小さく」。1行目のアプリ名は幅いっぱいに使えるようにする */
+        .__lb_diag_ver_row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 6px;
+          margin-top: 1px;
+        }
+        #__lb_diag .__lb_diag_version {
+          flex: 1;
+          min-width: 0;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
         /* 折りたたみ・展開ボタン（文字付きで押せることが分かる形に） */
+        .__lb_diag_collapse_btn {
+          padding: 2px 7px !important;
+          line-height: 1.3;
+        }
         .__lb_diag_collapse_btn,
         #__lb_mini_open {
           flex-shrink: 0;
@@ -1835,14 +1855,23 @@
       mini.innerHTML = `<button id="__lb_mini_open" type="button">▲ 開く</button><span id="__lb_mini_count"></span><button id="__lb_mini_stop" type="button"></button>`;
       document.body.appendChild(mini);
 
-      // ヘッダー右端に「▼ 小さく」ボタン（ヘッダーの flex 子要素なのでタイトルは省略表示で縮む）。
+      // 「▼ 小さく」ボタンは版表示と同じ2行目に置く（1行目に置くとアプリ名が途中で切れる）。
       // クリックはヘッダーのハンドラまで伝わって折りたたむ
       const collapseBtn = document.createElement('button');
       collapseBtn.type = 'button';
       collapseBtn.className = '__lb_diag_collapse_btn';
       collapseBtn.textContent = '▼ 小さく';
-      const headerEl = diag.querySelector('.__lb_diag_header');
-      if (headerEl) headerEl.appendChild(collapseBtn);
+      const verEl = diag.querySelector('.__lb_diag_version');
+      if (verEl) {
+        const verRow = document.createElement('div');
+        verRow.className = '__lb_diag_ver_row';
+        verEl.parentNode.insertBefore(verRow, verEl);
+        verRow.appendChild(verEl);
+        verRow.appendChild(collapseBtn);
+      } else {
+        const headerEl = diag.querySelector('.__lb_diag_header');
+        if (headerEl) headerEl.appendChild(collapseBtn);
+      }
 
       const miniCount = mini.querySelector('#__lb_mini_count');
       const miniStop = mini.querySelector('#__lb_mini_stop');
