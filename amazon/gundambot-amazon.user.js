@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         G.U.N.D.A.M. Bot - Amazon購入
 // @namespace    gundam-bot.amazon
-// @version      0.4.9.0
+// @version      0.5.0.0
 // @description  Amazon.co.jp 直販オンリーの自動購入(iOS Safari + Userscripts拡張用)/ Build 2026-05-11 JST
 // @author       HIRO
 // @match        https://www.amazon.co.jp/*
@@ -3297,7 +3297,7 @@
         qtyStop:         true,
     };
 
-    const SCRIPT_VERSION = '0.4.9.0';
+    const SCRIPT_VERSION = '0.5.0.0';
 
     // v0.3.8.10: aod-env-snapshot のセッション内 1 回出力フラグ
     //   localStorage 'LB_AM_AOD_ENV_SIG' 永久キャッシュ廃止の代替。
@@ -4008,6 +4008,66 @@
             if (!el || !el.closest) return false;
             return !!el.closest('#lb-am-panel');
         } catch (e) { return false; }
+    };
+
+    // ★v0.5.0.0: AOD の「さらに表示」押下を AOD パネルの中だけに限定する（HIRO 至急報告 2026-11-11）
+    //
+    //   実ログ 2026-11-11 23:30 / 23:34 / 23:51 / 23:54（iOS v0.4.9.0・🛒通常開始・B0CKDYX776）:
+    //     23:51:14.802  AOD 走査: found=false scanned=0     ← AOD の出品一覧がまだ空
+    //     23:51:15.563  screen=OTHER  /stores/page/D5AC5A58-…/?store_ref=SB_…&aaxitk=…
+    //   = Sponsored Brands（スポンサー広告）のブランドストアに飛ばされていた。
+    //     store_ref=SB_… / aaxitk=… は広告クリックの計測パラメータ。
+    //
+    //   原因: 「さらに表示」「もっと見る」「次のページ」等を
+    //     findByText('a, button, span, div[role=button]', label) で
+    //   **ページ全体から部分一致で**探し、最初に見つかったものを押していた。
+    //   AOD の一覧が未ロードで AOD 内にボタンが無いと、ページ上の別の
+    //   「もっと見る」= 広告のリンクを掴んで押してしまう。
+    //
+    //   対策:
+    //     ① 探す範囲を AOD パネル（モーダル/ダイアログ）の中だけにする。無ければ何も押さない。
+    //     ② 広告の中の要素、ストア/広告計測 URL へのリンクは押さない。
+    //     ③ 押す直前に、何を押すかをログに残す。
+    const AOD_SCOPE_SELECTORS =
+        '#aod-container, #all-offers-display, #all-offers-display-dialog, #aod-modal-rdesign, ' +
+        '#aod-offer-list, div[aria-modal="true"], [role="dialog"]';
+    const AD_ANCESTOR_SELECTORS =
+        '[class*="sponsored" i], [id*="sponsored" i], [data-component-type*="sponsored" i], ' +
+        '[cel_widget_id*="sp_"], [data-cel-widget*="sp_"], [id^="sp_"], [data-ad-feedback], ' +
+        '[class*="adFeedback"], [id*="ad-feedback"], [id*="sbv"], [class*="sbv"]';
+    const BAD_NAV_HREF = /store_ref=|aaxitk=|\/stores\/|\/sspa\/|[?&]sr=|\/s\?|\/s\/ref|\/gp\/aw\/s\b/;
+
+    const _isSafeAodExpandTarget = (el) => {
+        try {
+            if (el.closest && el.closest(AD_ANCESTOR_SELECTORS)) return false;   // 広告の中
+            const a = el.closest ? el.closest('a[href]') : null;
+            if (a && BAD_NAV_HREF.test(a.getAttribute('href') || '')) return false; // ストア/広告/検索へ飛ぶ
+            return true;
+        } catch (e) { return false; }
+    };
+
+    //   AOD パネル内から、ラベルに一致する押してよい要素を 1 つ返す。無ければ null（=押さない）。
+    const findAodExpandButton = (labels) => {
+        let scopes = [];
+        try { scopes = Array.from(document.querySelectorAll(AOD_SCOPE_SELECTORS)); } catch (e) {}
+        if (!scopes.length) return null;
+        for (const label of labels) {
+            for (const sc of scopes) {
+                let els = [];
+                try { els = sc.querySelectorAll('a, button, span, div[role="button"], input[type="submit"]'); } catch (e) {}
+                for (const el of els) {
+                    try {
+                        if (_isOwnPanelDescendant(el)) continue;
+                        const t = (el.innerText || el.value || '').trim();
+                        if (!t || t.length > 30 || !t.includes(label)) continue;
+                        if (!isElementVisible(el)) continue;
+                        if (!_isSafeAodExpandTarget(el)) continue;
+                        return el;
+                    } catch (e) {}
+                }
+            }
+        }
+        return null;
     };
 
     const findByText = (selector, ...texts) => {
@@ -11654,6 +11714,7 @@
             console.log(`[GBOT-AM] expandAllAodOffers start: current=${prevCount}, expected=${expectedTotal}`);
         }
 
+        let _aodExpandLogged = false;
         for (let i = 0; i < maxIter; i++) {
             totalIters++;
             if (isStopped()) return prevCount;
@@ -11664,12 +11725,21 @@
                 'もっと見る', '次のページ', 'もっと出品者を見る', 'すべての出品者を表示',
             ];
             let clickedMore = false;
-            for (const label of moreLabels) {
-                const el = findByText('a, button, span, div[role="button"]', label);
-                if (el && isElementVisible(el)) {
-                    try { el.click(); clickedMore = true; } catch (e) {}
-                    break;
+            // ★v0.5.0.0: AOD パネル内だけを探す（ページ全体だと広告の「もっと見る」を押してしまう）
+            const _moreEl = findAodExpandButton(moreLabels);
+            if (_moreEl) {
+                if (!_aodExpandLogged) {
+                    _aodExpandLogged = true;
+                    try {
+                        const _a = _moreEl.closest ? _moreEl.closest('a[href]') : null;
+                        logAm('info', 'aod', 'AOD 展開ボタンを押す', {
+                            text: (_moreEl.innerText || _moreEl.value || '').trim().slice(0, 30),
+                            tag: _moreEl.tagName,
+                            href: _a ? (_a.getAttribute('href') || '').slice(0, 90) : '',
+                        });
+                    } catch (e) {}
                 }
+                try { _moreEl.click(); clickedMore = true; } catch (e) {}
             }
 
             // スクロールも併用(lazy-load 発火)
